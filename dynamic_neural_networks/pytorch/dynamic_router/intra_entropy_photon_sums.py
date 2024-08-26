@@ -1,13 +1,17 @@
 # MOE APPEAOCH
 # General training of experts: Learning rate is scaled according to number of samples in the batch
-# ROUTER TRAINED: generator's loss * differentation loss. Calculate the average sum of photons from the generated
-# images for each expert. The loss term should ensure that these means are as different as possible among experts.
-# And added entropy calculation so that router is equitable gate distribution.
-# scaled-loss-sdigan-intensity-aux-reg-1-3-experts
 
-#
+# Genrator architecture: sdigan-intensity-aux-reg-1-disc-3-experts
+
+# ROUTER LOSS: generator's loss * intraentropy of photon sums
+# 1. Generator's loss: combined loss of all generators from reconstructing (1-discriminator's loss)
+# 2. Intraentropy of photon sums:
+# Refers to the non-uniformity or "spread" of a measure within a single cluster (or in this case, generator).
+# Minimizing intraentropy can be understood as minimizing the diversity of the sum of pixels inside each of the generators,
+# i.e. aiming for a situation where each generator produces images with similar sum of pixels.
+
 # Modification: 20.08.24
-# Added calculation of WS ofr the whole distribution. Each generator generates samples, then join all of them and calculate.
+# Added calculation of WS ofr the whole distribution. Each generator generates samples, then join all of them and calculate. 
 
 import time
 import os
@@ -46,12 +50,12 @@ IN_STRENGTH = 0.001
 AUX_STRENGTH = 0.1
 
 GEN_STRENGTH = 1e-1  # Strength on the generator loss in the router loss calculation
-DIFF_STRENGTH = 1e-5  # Differentation on the generator loss in the router loss calculation
-ENT_STRENGTH = 1e0
+IN_ENTROPY_STRENGTH = 1e-1  # Strength on the intraentropy of photon sums in the router loss calculation
+ENT_STRENGTH = 1e1  # Strength on the expert utilization entropy in the router loss calculation
 N_RUNS = 2
 
 for _ in range(N_RUNS):
-    print("GEN_STRENGTH:", GEN_STRENGTH, "DIFF_STRENGTH:", DIFF_STRENGTH, "ENT_STRENGTH:", ENT_STRENGTH)
+    print("GEN_STRENGTH:", GEN_STRENGTH, "IN_ENTROPY_STRENGTH:", IN_ENTROPY_STRENGTH)
     BATCH_SIZE = 256
     NOISE_DIM = 10
     EPOCHS = 200
@@ -59,7 +63,7 @@ for _ in range(N_RUNS):
     LR_D = 1e-5
     LR_R = 1e-3
     LR_A = 5e-5
-    NAME = f"differentation_{GEN_STRENGTH}_{DIFF_STRENGTH}-sdigan-intensity-aux-reg-1-disc-3-experts"
+    NAME = f"Photonsum_intraentropy_utilization_test_{GEN_STRENGTH}_{IN_ENTROPY_STRENGTH}_{ENT_STRENGTH}"
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     data = pd.read_pickle('/net/tscratch/people/plgpbedkowski/data/data_proton_photonsum_proton_1_2312.pkl')
@@ -230,7 +234,6 @@ for _ in range(N_RUNS):
             out = self.fc3(latent)
             out = self.sigmoid(out)
             return out, latent
-
 
     # Define the Router Network
     class RouterNetwork(nn.Module):
@@ -409,7 +412,8 @@ for _ in range(N_RUNS):
         noise_2 = torch.randn(BATCH_SIZE, NOISE_DIM, device=device)
 
         gen_losses = torch.zeros(3)
-        mu = torch.zeros(3)  # mean intensities for each expert for each batch
+        mean_intenisties_experts = torch.zeros(3)  # mean intensities for each expert for each batch
+        photonsum_entropy_experts = torch.zeros(3)  # entropy for each expert for each batch
         aux_reg_losses = []
         disc_losses = []
 
@@ -429,6 +433,10 @@ for _ in range(N_RUNS):
             fake_images = generators[i](selected_noise, selected_cond).to(device)
             fake_images_2 = generators[i](selected_noise_2, selected_cond).to(device)
 
+            print(f'GEN {i}')
+            print(f"fake images shape: {fake_images.shape}")
+            print(f"fake images 2 shape: {fake_images_2.shape}")
+
             fake_output, fake_latent = discriminator(fake_images, selected_cond)
             fake_output_2, fake_latent_2 = discriminator(fake_images_2, selected_cond)
 
@@ -436,11 +444,28 @@ for _ in range(N_RUNS):
             div_loss = sdi_gan_regularization(fake_latent, fake_latent_2,
                                               selected_noise, selected_noise_2,
                                               std[selected_indices].clone().detach(), DI_STRENGTH)
-            intensity_loss, mean_intensity = intensity_regularization(fake_images, intensity[selected_indices].clone().detach(),
-                                                                      scaler_intensity, IN_STRENGTH)
+
+            intensity_loss, mean_intenisties, mean_intensity = intensity_regularization(fake_images, intensity[selected_indices].clone().detach().to(device),
+                                                                                        scaler_intensity, IN_STRENGTH)
             gen_loss = gen_loss + div_loss + intensity_loss
 
-            mu[i] = mean_intensity
+            # mean_intensity is a float value from the whole batch
+            # mean_intenisties = torch.tensor(sum_all_axes_p, dtype=torch.float32).to(device)
+
+            # calculate intraenropy inside expert generator based on the intensity photon sum
+
+            # Normalizacja sumy pikseli do przedziału [0, 1]
+            normalized_pixel_sums = (mean_intenisties - mean_intenisties.min()) / (mean_intenisties.max() - mean_intenisties.min() + 1e-8)
+
+            print(f"Expert {i} pixel sums shape:", normalized_pixel_sums.shape)
+
+            # Oblicz histogram
+            histogram = torch.histc(normalized_pixel_sums, bins=30, min=0, max=1)  # TODO: Parameter
+            histogram = histogram / histogram.sum()  # Normalizacja histogramu
+
+            # Obliczenie entropii
+            entropy = -torch.sum(histogram * torch.log(histogram + 1e-8))
+            photonsum_entropy_experts[i] = entropy.clone().detach().to(device)
 
             # scale learning rate:
             generator_optimizers[i].param_groups[0]['lr'] = LR_G * class_counts_adjusted[i].clone().detach()
@@ -482,11 +507,14 @@ for _ in range(N_RUNS):
         total_disc_loss.backward()
         discriminator_optimizer.step()
 
+        # calculate intra entropy
+        intra_entropy_loss = torch.mean(photonsum_entropy_experts) * IN_ENTROPY_STRENGTH
+
         # Router loss is the sum of the losses from the generators
-        differentation_loss = (- (mu[0] - mu[1]) ** 2 - (mu[0] - mu[2]) ** 2 - (mu[1] - mu[2]) ** 2) * DIFF_STRENGTH
         gen_loss_scaled = gen_losses.mean().clone() * GEN_STRENGTH
         expert_utilization_loss = expert_utilization_entropy * ENT_STRENGTH
-        router_loss = gen_loss_scaled + differentation_loss - expert_utilization_loss
+
+        router_loss = gen_loss_scaled + intra_entropy_loss - expert_utilization_loss
         router_loss.requires_grad_(True)
 
         # Train Router Network
@@ -496,7 +524,7 @@ for _ in range(N_RUNS):
         return gen_losses[0].item(), gen_losses[1].item(), gen_losses[2].item(),\
                total_disc_loss.item(), router_loss.item(), div_loss.cpu().item(),\
                intensity_loss.cpu().item(), aux_reg_loss.cpu().item(), class_counts.cpu().detach(),\
-               differentation_loss.cpu().item(), expert_utilization_loss.cpu().item()
+               intra_entropy_loss.cpu().item()
 
     # Settings for plotting
     num_examples_to_generate = 6
@@ -517,8 +545,7 @@ for _ in range(N_RUNS):
             div_loss_epoch = []
             intensity_loss_epoch = []
             aux_reg_loss_epoch = []
-            differentation_loss_epoch = []
-            utilization_loss_epoch = []
+            intra_entropy_loss_epoch = []
             n_chosen_experts_0 = []
             n_chosen_experts_1 = []
             n_chosen_experts_2 = []
@@ -526,7 +553,7 @@ for _ in range(N_RUNS):
             # Iterate through both data loaders
             for batch in train_loader:
                 gen_loss_0, gen_loss_1, gen_loss_2, disc_loss, router_loss, div_loss, intensity_loss, \
-                aux_reg_loss, n_chosen_experts_batch, differentation_loss, utilization_loss = train_step(batch)
+                aux_reg_loss, n_chosen_experts_batch, intra_entropy_loss = train_step(batch)
                 gen_loss_epoch_0.append(gen_loss_0)
                 gen_loss_epoch_1.append(gen_loss_1)
                 gen_loss_epoch_2.append(gen_loss_2)
@@ -538,8 +565,7 @@ for _ in range(N_RUNS):
                 n_chosen_experts_0.append(n_chosen_experts_batch[0])
                 n_chosen_experts_1.append(n_chosen_experts_batch[1])
                 n_chosen_experts_2.append(n_chosen_experts_batch[2])
-                differentation_loss_epoch.append(differentation_loss)
-                utilization_loss_epoch.append(utilization_loss)
+                intra_entropy_loss_epoch.append(intra_entropy_loss)
 
                 # disc_loss_epoch.append((disc_loss_0 + disc_loss_1 + disc_loss_2) / NUM_GENERATORS)
                 # router_loss_epoch.append((router_loss_0 + router_loss_1 + router_loss_2) / NUM_GENERATORS)
@@ -588,8 +614,7 @@ for _ in range(N_RUNS):
                 'div_loss': np.mean(div_loss_epoch),
                 'intensity_loss': np.mean(intensity_loss_epoch),
                 'router_loss': np.mean(router_loss_epoch),
-                'differentation_loss': np.mean(differentation_loss_epoch),
-                'utilization_loss': np.mean(utilization_loss_epoch),
+                'intra_entropy_loss_epoch': np.mean(intra_entropy_loss_epoch),
                 'disc_loss': np.mean(disc_loss_epoch),
                 'aux_reg_loss': np.mean(aux_reg_loss_epoch),
                 'n_choosen_experts_mean_epoch_0': np.mean(n_chosen_experts_0),
@@ -625,8 +650,7 @@ for _ in range(N_RUNS):
         "intensity_strength": IN_STRENGTH,
         "auxiliary_strength": AUX_STRENGTH,
         "Generator_strength": GEN_STRENGTH,
-        "Differentation_strength": DIFF_STRENGTH,
-        "Utilization_strength": ENT_STRENGTH,
+        "IntraEntropy_photon_sum_strength": IN_ENTROPY_STRENGTH,
         "Learning rate_generator": LR_G,
         "Learning rate_discriminator": LR_D,
         "Learning rate_router": LR_R,
