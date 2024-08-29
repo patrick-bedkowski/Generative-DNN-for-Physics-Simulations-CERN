@@ -429,7 +429,7 @@ for _ in range(N_RUNS):
         mean_intensities_experts = np.zeros(3)  # mean intensities for each expert for each batch
         std_intensities_experts = np.zeros(3)  # std intensities for each expert for each batch
         photonsum_entropy_experts = torch.zeros(3)  # entropy for each expert for each batch
-        mean_intensities_experts_batch = torch.zeros(BATCH_SIZE, N_EXPERTS)  # entropy for each expert for each batch
+        mean_intensities_experts_batch = torch.zeros(BATCH_SIZE)  # entropy for each expert for each batch
         aux_reg_losses = []
         disc_losses = []
 
@@ -468,7 +468,7 @@ for _ in range(N_RUNS):
             intensity_loss, mean_intenisties, std_intensity, mean_intensity = intensity_regularization(fake_images,
                                                                                                        intensity[selected_indices].clone().detach().to(device),
                                                                                                        scaler_intensity, IN_STRENGTH)
-            mean_intensities_experts_batch[:, i] = mean_intenisties.squeeze()  # input the mean intensities for each expert
+            mean_intensities_experts_batch[selected_indices] = mean_intenisties.squeeze()  # input the mean intensities for calculated samples
             gen_loss = gen_loss + div_loss + intensity_loss
 
             #
@@ -672,7 +672,6 @@ for _ in range(N_RUNS):
                                                          y_test[indices_expert_2]],
                                                         generators, ch_org,
                                                         NOISE_DIM, device)
-            # ws_values.append(ws)
             #
             # ws_mean = np.array(ws_values).mean()
             epoch_time = time.time() - start

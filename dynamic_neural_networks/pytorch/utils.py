@@ -310,7 +310,7 @@ def intensity_regularization(gen_im_proton, intensity_proton, scaler_intensity, 
     Returns:
         torch.Tensor: The intensity regularization loss, calculated as the Mean Absolute Error (MAE) between the scaled
                       sum of the intensities in the generated images and the target intensities, multiplied by `IN_STRENGTH`.
-        torch.Tensor: The sum of intensities in each generated image, with shape [batch_size, 1].
+        torch.Tensor: The sum of intensities in each generated image, with shape [n_samples, 1].
         float: The standard deviation of the scaled intensity values across the batch.
         float: The mean of the scaled intensity values across the batch.
     """
