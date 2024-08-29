@@ -651,7 +651,7 @@ for _ in range(N_RUNS):
             #     # intensity = intensity.to(device)
             #     # true_positions = true_positions.to(device)
 
-            y_test = y_test.to(device)
+            y_test = torch.tensor(y_test, device=device)
 
             # Test Router Network
             with torch.no_grad():
