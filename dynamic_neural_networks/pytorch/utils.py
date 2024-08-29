@@ -224,6 +224,7 @@ def get_predictions_from_generator_results(num_batches, batch_size, num_samples,
 
         # Generate results using the generator
         with torch.no_grad():
+            generator.eval()
             results = generator(noise, noise_cond).cpu().numpy()
 
         results = np.exp(results) - 1
@@ -296,8 +297,24 @@ def sdi_gan_regularization(fake_latent, fake_latent_2, noise, noise_2, std, DI_S
 
 def intensity_regularization(gen_im_proton, intensity_proton, scaler_intensity, IN_STRENGTH):
     """
-    Returns intensity loss (torch tensor), sum_all_axes_p (mean for each image, tensor), mean intensity across the batch (float) of the input generated images.
+    Computes the intensity regularization loss for generated images, returning the loss, the sum of intensities per image,
+    and the mean and standard deviation of the intensity across the batch.
+
+    Args:
+        gen_im_proton (torch.Tensor): A tensor of generated images with shape [batch_size, channels, height, width].
+        intensity_proton (torch.Tensor): A tensor representing the target intensity values for the batch, with shape [batch_size].
+        scaler_intensity (object): A scaler object used to normalize the intensity values, typically an instance of a
+                                   scaler from `sklearn.preprocessing` (e.g., `StandardScaler`).
+        IN_STRENGTH (float): A scalar that controls the strength of the intensity regularization in the final loss.
+
+    Returns:
+        torch.Tensor: The intensity regularization loss, calculated as the Mean Absolute Error (MAE) between the scaled
+                      sum of the intensities in the generated images and the target intensities, multiplied by `IN_STRENGTH`.
+        torch.Tensor: The sum of intensities in each generated image, with shape [batch_size, 1].
+        float: The standard deviation of the scaled intensity values across the batch.
+        float: The mean of the scaled intensity values across the batch.
     """
+
     # Sum the intensities in the generated images
     sum_all_axes_p = torch.sum(gen_im_proton, dim=[2, 3], keepdim=True)  # Sum along all but batch dimension
     sum_all_axes_p = sum_all_axes_p.reshape(-1, 1)  # Scale and reshape back to (batch_size, 1)
@@ -307,7 +324,7 @@ def intensity_regularization(gen_im_proton, intensity_proton, scaler_intensity, 
     # mean_intensity = sum_all_axes_p.mean()
 
     sum_all_axes_p_scaled = scaler_intensity.transform(sum_all_axes_p_np)
-    mean_intensity_scaled = sum_all_axes_p_scaled.mean()
+    std_intensity_scaled, mean_intensity_scaled = sum_all_axes_p_scaled.std(), sum_all_axes_p_scaled.mean()
 
     # Convert back to tensor and move to the correct device
     sum_all_axes_p_scaled = torch.tensor(sum_all_axes_p_scaled, dtype=torch.float32).to(gen_im_proton.device)
@@ -318,7 +335,7 @@ def intensity_regularization(gen_im_proton, intensity_proton, scaler_intensity, 
     # Calculate MAE loss
     mae_value_p = F.l1_loss(sum_all_axes_p_scaled, intensity_proton)
 
-    return IN_STRENGTH * mae_value_p, sum_all_axes_p, mean_intensity_scaled
+    return IN_STRENGTH * mae_value_p, sum_all_axes_p, std_intensity_scaled, mean_intensity_scaled
 
 
 def generate_and_save_images(model, epoch, noise, noise_cond, x_test,
@@ -354,3 +371,32 @@ def generate_and_save_images(model, epoch, noise, noise_cond, x_test,
 
     fig.tight_layout(rect=[0, 0, 1, 0.975])
     return fig
+
+
+def calculate_expert_distribution_loss(gating_probs, features, lambda_reg=0.1):
+    """
+    Calculate the regularization loss for the router network to encourage balanced task distribution among experts.
+
+    Args:
+        gating_probs (torch.Tensor): The gating probabilities for each sample and expert with shape (batch_size, num_experts).
+        features (torch.Tensor): The feature representations of the inputs with shape (batch_size, feature_dim).
+        lambda_reg (float): The regularization strength.
+
+    Returns:
+        torch.Tensor: The calculated regularization loss.
+    """
+
+    # Compute the pairwise Euclidean distance between the features
+    pairwise_distances = torch.cdist(features, features, p=2)  # Shape: (batch_size, batch_size)
+
+    # Compute the gating similarities (dot product of gating probabilities for each pair of samples)
+    gating_similarities = torch.matmul(gating_probs, gating_probs.T)  # Shape: (batch_size, batch_size)
+
+    # Regularization loss: sum of (gating_similarities * pairwise_distances)
+    reg_loss = torch.sum(gating_similarities * pairwise_distances) / gating_similarities.size(0)
+
+    # Apply the regularization strength
+    reg_loss = lambda_reg * reg_loss
+
+    return reg_loss
+

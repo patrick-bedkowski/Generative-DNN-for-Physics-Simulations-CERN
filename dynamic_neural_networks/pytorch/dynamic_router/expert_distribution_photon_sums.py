@@ -3,24 +3,34 @@
 
 # Genrator architecture: sdigan-intensity-aux-reg-1-disc-3-experts
 
-# ROUTER LOSS: generator's loss * intraentropy of photon sums
-# 1. Generator's loss: combined loss of all generators from reconstructing (1-discriminator's loss)
-# 2. Intraentropy of photon sums:
-# Refers to the non-uniformity or "spread" of a measure within a single cluster (or in this case, generator).
-# Minimizing intraentropy can be understood as minimizing the diversity of the sum of pixels inside each of the generators,
-# i.e. aiming for a situation where each generator produces images with similar sum of pixels.
+# ROUTER LOSS: generator's loss * Expert Distribution Regularization
+# 1. Generator's Loss: Combined loss of all generators, focusing on how well they reconstruct the target output.
+# 2. Expert Distribution Regularization:
+#    This regularization term aims to enforce a balanced and effective task distribution among experts.
+#    It is designed to minimize imbalances in how the router assigns tasks (or images) to different experts.
+#    The regularization is calculated by considering the gating probabilities and the feature distances (e.g., sum of pixels),
+#    encouraging similar tasks to be routed to the same expert and dissimilar tasks to different experts.
+#    This results in improved specialization of experts and better overall model performance.
+#
+#    - Gating Probabilities: The likelihoods assigned by the router to each expert for each task.
+#    - Feature Distances: Measures such as the Euclidean distance between features (e.g., sum of pixels),
+#      used to determine the similarity between tasks.
+#    - Regularization Loss: Encourages routing similar tasks to the same expert and different tasks to different experts,
+#      promoting balanced expert utilization.
+#    - Goal: Minimize the regularization loss to ensure that each expert specializes in a distinct subset of tasks,
+#      thereby improving the diversity and effectiveness of the generated outputs.
 
 # Modification: 20.08.24
 # Added calculation of WS ofr the whole distribution. Each generator generates samples, then join all of them and calculate. 
-
-# Modification: 29.08.24
-# Modified the calculation of the WS. Previously it used the selected indices of samples corresponding to the experts
-# from the 1-5, 6-17, 18+ photons sums intervals. Now the samples are selected by the router.
 
 # Modification: 27.08.24
 # modified architecture of router from
 # 128-64-32-3 to 256-128-64-32-3
 # and LR_R from 1e-3 to 5e-4
+
+# Modification: 29.08.24
+# Modified the calculation of the WS. Previously it used the selected indices of samples corresponding to the experts
+# from the 1-5, 6-17, 18+ photons sums intervals. Now the samples are selected by the router.
 
 
 import time
@@ -42,7 +52,8 @@ from utils import (sum_channels_parallel, calculate_ws_ch_proton_model,
                    calculate_joint_ws_across_experts,
                    create_dir, save_scales, evaluate_router,
                    intensity_regularization, sdi_gan_regularization,
-                   generate_and_save_images)
+                   generate_and_save_images,
+                   calculate_expert_distribution_loss)
 from torchmetrics.classification import MulticlassAccuracy, MulticlassPrecision, MulticlassRecall, MulticlassF1Score
 
 
@@ -58,6 +69,7 @@ WS_MEAN_SAVE_THRESHOLD = 5
 DI_STRENGTH = 0.1
 IN_STRENGTH = 0.001
 AUX_STRENGTH = 0.1
+ED_STRENGTH = 1e0  # Strength on the expert distribution loss in the router loss calculation
 
 GEN_STRENGTH = 1e-1  # Strength on the generator loss in the router loss calculation
 IN_ENTROPY_STRENGTH = 1e-1  # Strength on the intraentropy of photon sums in the router loss calculation
@@ -74,7 +86,7 @@ for _ in range(N_RUNS):
     LR_D = 1e-5
     LR_R = 5e-4
     LR_A = 5e-5
-    NAME = f"4_e_photonsum_intraentropy_utilization_test_{GEN_STRENGTH}_{IN_ENTROPY_STRENGTH}_{ENT_STRENGTH}"
+    NAME = f"expert_distribution_loss_test"
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     data = pd.read_pickle('/net/tscratch/people/plgpbedkowski/data/data_proton_photonsum_proton_1_2312.pkl')
@@ -404,7 +416,7 @@ for _ in range(N_RUNS):
 
         expert_utilization_entropy = calculate_expert_utilization_entropy(predicted_expert_one_hot)
 
-        _, predicted_expert = torch.max(predicted_expert_one_hot, 1)
+        _, predicted_expert = torch.max(predicted_expert_one_hot, 1)  # (BATCH_SIZE, N_EXPERTS)
         class_counts = torch.zeros(NUM_GENERATORS, dtype=torch.float).to(device)
         for class_label in range(NUM_GENERATORS):
             class_counts[class_label] = (predicted_expert == class_label).sum().item()
@@ -417,6 +429,7 @@ for _ in range(N_RUNS):
         mean_intensities_experts = np.zeros(3)  # mean intensities for each expert for each batch
         std_intensities_experts = np.zeros(3)  # std intensities for each expert for each batch
         photonsum_entropy_experts = torch.zeros(3)  # entropy for each expert for each batch
+        mean_intensities_experts_batch = torch.zeros(BATCH_SIZE, N_EXPERTS)  # entropy for each expert for each batch
         aux_reg_losses = []
         disc_losses = []
 
@@ -455,6 +468,7 @@ for _ in range(N_RUNS):
             intensity_loss, mean_intenisties, std_intensity, mean_intensity = intensity_regularization(fake_images,
                                                                                                        intensity[selected_indices].clone().detach().to(device),
                                                                                                        scaler_intensity, IN_STRENGTH)
+            mean_intensities_experts_batch[:, i] = mean_intenisties.squeeze()  # input the mean intensities for each expert
             gen_loss = gen_loss + div_loss + intensity_loss
 
             #
@@ -531,9 +545,11 @@ for _ in range(N_RUNS):
 
         # Router loss is the sum of the losses from the generators
         gen_loss_scaled = gen_losses.mean().clone() * GEN_STRENGTH
-        expert_utilization_loss = expert_utilization_entropy * ENT_STRENGTH
+        # expert_utilization_loss = expert_utilization_entropy * ENT_STRENGTH
 
-        router_loss = gen_loss_scaled.clone().detach().to(device) + intra_entropy_loss - expert_utilization_loss
+        expert_distribution_loss = calculate_expert_distribution_loss(predicted_expert, mean_intensities_experts_batch, ED_STRENGTH)
+
+        router_loss = gen_loss_scaled.clone().detach().to(device) + expert_distribution_loss
         router_loss.requires_grad_(True)
 
         # Train Router Network
@@ -543,7 +559,7 @@ for _ in range(N_RUNS):
         return gen_losses[0].item(), gen_losses[1].item(), gen_losses[2].item(),\
                total_disc_loss.item(), router_loss.item(), div_loss.cpu().item(),\
                intensity_loss.cpu().item(), aux_reg_loss.cpu().item(), class_counts.cpu().detach(),\
-               intra_entropy_loss.cpu().item(), std_intensities_experts, mean_intensities_experts
+               intra_entropy_loss.cpu().item(), std_intensities_experts, mean_intensities_experts, expert_distribution_loss
 
     # Settings for plotting
     START_GENERATING_IMG_FROM_IDX = 20

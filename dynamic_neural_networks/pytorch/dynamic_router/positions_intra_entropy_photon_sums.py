@@ -13,15 +13,8 @@
 # Modification: 20.08.24
 # Added calculation of WS ofr the whole distribution. Each generator generates samples, then join all of them and calculate. 
 
-# Modification: 29.08.24
-# Modified the calculation of the WS. Previously it used the selected indices of samples corresponding to the experts
-# from the 1-5, 6-17, 18+ photons sums intervals. Now the samples are selected by the router.
-
-# Modification: 27.08.24
-# modified architecture of router from
-# 128-64-32-3 to 256-128-64-32-3
-# and LR_R from 1e-3 to 5e-4
-
+# Modification 27.08.21
+# Added the incorporation of the predicted coordiantes x and y of the max pixel from the aux regressor
 
 import time
 import os
@@ -60,10 +53,9 @@ IN_STRENGTH = 0.001
 AUX_STRENGTH = 0.1
 
 GEN_STRENGTH = 1e-1  # Strength on the generator loss in the router loss calculation
-IN_ENTROPY_STRENGTH = 1e-1  # Strength on the intraentropy of photon sums in the router loss calculation
+IN_ENTROPY_STRENGTH = 1e1  # Strength on the intraentropy of photon sums in the router loss calculation
 ENT_STRENGTH = 1e1  # Strength on the expert utilization entropy in the router loss calculation
 N_RUNS = 2
-N_EXPERTS = 3
 
 for _ in range(N_RUNS):
     print("GEN_STRENGTH:", GEN_STRENGTH, "IN_ENTROPY_STRENGTH:", IN_ENTROPY_STRENGTH)
@@ -72,14 +64,17 @@ for _ in range(N_RUNS):
     EPOCHS = 200
     LR_G = 1e-4
     LR_D = 1e-5
-    LR_R = 5e-4
+    LR_R = 1e-3
     LR_A = 5e-5
-    NAME = f"4_e_photonsum_intraentropy_utilization_test_{GEN_STRENGTH}_{IN_ENTROPY_STRENGTH}_{ENT_STRENGTH}"
+    NAME = f"positions_intraentropy_utilization_test_{GEN_STRENGTH}_{IN_ENTROPY_STRENGTH}_{ENT_STRENGTH}"
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     data = pd.read_pickle('/net/tscratch/people/plgpbedkowski/data/data_proton_photonsum_proton_1_2312.pkl')
     data_cond = pd.read_pickle('/net/tscratch/people/plgpbedkowski/data/data_cond_photonsum_proton_1_2312.pkl')
     photon_sum_proton_min, photon_sum_proton_max = data_cond.proton_photon_sum.min(), data_cond.proton_photon_sum.max()
+    print("data shape:", data.shape)
+    print("data_cond shape:", data_cond.shape)
+    print("data_cond columns:", data_cond.columns)
 
     # data of coordinates of maximum value of pixel on the images
     data_posi = pd.read_pickle('/net/tscratch/people/plgpbedkowski/data/data_coord_proton_photonsum_proton_1_2312.pkl')
@@ -148,6 +143,10 @@ for _ in range(N_RUNS):
     org = np.exp(x_test) - 1
     ch_org = np.array(org).reshape(-1, 56, 30)
     del org
+
+    indices_expert_0 = np.where(expert_number_test == 0)[0]
+    indices_expert_1 = np.where(expert_number_test == 1)[0]
+    indices_expert_2 = np.where(expert_number_test == 2)[0]
 
     ch_org = pd.DataFrame(sum_channels_parallel(ch_org)).values
 
@@ -340,7 +339,7 @@ for _ in range(N_RUNS):
     generator0 = Generator(NOISE_DIM, 9).to(device)
     generator1 = Generator(NOISE_DIM, 9).to(device)
     generator2 = Generator(NOISE_DIM, 9).to(device)
-    router_network = RouterNetwork(9).to(device)
+    router_network = RouterNetwork(9+2).to(device)
 
     generators = [generator0, generator1, generator2]
     generator_optimizers = [optim.Adam(gen.parameters(), lr=LR_G) for gen in generators]
@@ -389,7 +388,7 @@ for _ in range(N_RUNS):
 
     # Adjust train_step function to work with the single discriminator
     def train_step(batch):
-        real_images, real_images_2, cond, std, intensity, true_positions, _ = batch
+        real_images, real_images_2, cond, std, intensity, true_positions, real_expert = batch
 
         real_images = real_images.unsqueeze(1).to(device)
         # real_images_2 = real_images_2.unsqueeze(1).to(device)
@@ -400,29 +399,29 @@ for _ in range(N_RUNS):
 
         # Train Router Network
         router_optimizer.zero_grad()
-        predicted_expert_one_hot = router_network(cond)
+        # join true_positions vector with cond vector
+        router_data = torch.cat((true_positions, cond), dim=1)
+
+        predicted_expert_one_hot = router_network(router_data)
 
         expert_utilization_entropy = calculate_expert_utilization_entropy(predicted_expert_one_hot)
 
         _, predicted_expert = torch.max(predicted_expert_one_hot, 1)
         class_counts = torch.zeros(NUM_GENERATORS, dtype=torch.float).to(device)
+
         for class_label in range(NUM_GENERATORS):
             class_counts[class_label] = (predicted_expert == class_label).sum().item()
+
         class_counts_adjusted = class_counts / predicted_expert.size(0)
 
         noise = torch.randn(BATCH_SIZE, NOISE_DIM, device=device)
         noise_2 = torch.randn(BATCH_SIZE, NOISE_DIM, device=device)
 
         gen_losses = torch.zeros(3)
-        mean_intensities_experts = np.zeros(3)  # mean intensities for each expert for each batch
-        std_intensities_experts = np.zeros(3)  # std intensities for each expert for each batch
+        mean_intenisties_experts = torch.zeros(3)  # mean intensities for each expert for each batch
         photonsum_entropy_experts = torch.zeros(3)  # entropy for each expert for each batch
         aux_reg_losses = []
         disc_losses = []
-
-        #
-        # FOR EACH GENERATOR
-        #
 
         for i in range(NUM_GENERATORS):
             generator_optimizers[i].zero_grad()
@@ -440,10 +439,6 @@ for _ in range(N_RUNS):
             fake_images = generators[i](selected_noise, selected_cond).to(device)
             fake_images_2 = generators[i](selected_noise_2, selected_cond).to(device)
 
-            print(f'GEN {i}')
-            print(f"fake images shape: {fake_images.shape}")
-            print(f"fake images 2 shape: {fake_images_2.shape}")
-
             fake_output, fake_latent = discriminator(fake_images, selected_cond)
             fake_output_2, fake_latent_2 = discriminator(fake_images_2, selected_cond)
 
@@ -452,23 +447,9 @@ for _ in range(N_RUNS):
                                               selected_noise, selected_noise_2,
                                               std[selected_indices].clone().detach(), DI_STRENGTH)
 
-            intensity_loss, mean_intenisties, std_intensity, mean_intensity = intensity_regularization(fake_images,
-                                                                                                       intensity[selected_indices].clone().detach().to(device),
-                                                                                                       scaler_intensity, IN_STRENGTH)
+            intensity_loss, mean_intenisties, mean_intensity = intensity_regularization(fake_images, intensity[selected_indices].clone().detach().to(device),
+                                                                                        scaler_intensity, IN_STRENGTH)
             gen_loss = gen_loss + div_loss + intensity_loss
-
-            #
-            # Calculate Expert Specification
-            #
-            mean_intensities_experts[i] = mean_intensity
-            std_intensities_experts[i] = std_intensity
-            # calculate the cond values specification, mean, std, min, max for selected cond
-            # mean_cond = selected_cond.mean()
-            # std_cond = selected_cond.std()
-            # min_cond = selected_cond.min()
-            # max_cond = selected_cond.max()
-            # calculate the min max values of pixels on the generated images
-            # min_pixel, max_pixel = fake_images.min(), fake_images.max()
 
             # mean_intensity is a float value from the whole batch
             # mean_intenisties = torch.tensor(sum_all_axes_p, dtype=torch.float32).to(device)
@@ -503,6 +484,7 @@ for _ in range(N_RUNS):
             disc_loss = (loss_real_disc + loss_fake_disc) / 2
             disc_losses.append(disc_loss)
 
+            # Calculate AUX REG loss
             generated_positions = aux_reg(fake_images.detach().clone())
 
             # Ensure true_positions and generated_positions require grad
@@ -533,7 +515,7 @@ for _ in range(N_RUNS):
         gen_loss_scaled = gen_losses.mean().clone() * GEN_STRENGTH
         expert_utilization_loss = expert_utilization_entropy * ENT_STRENGTH
 
-        router_loss = gen_loss_scaled.clone().detach().to(device) + intra_entropy_loss - expert_utilization_loss
+        router_loss = gen_loss_scaled + intra_entropy_loss - expert_utilization_loss
         router_loss.requires_grad_(True)
 
         # Train Router Network
@@ -543,15 +525,16 @@ for _ in range(N_RUNS):
         return gen_losses[0].item(), gen_losses[1].item(), gen_losses[2].item(),\
                total_disc_loss.item(), router_loss.item(), div_loss.cpu().item(),\
                intensity_loss.cpu().item(), aux_reg_loss.cpu().item(), class_counts.cpu().detach(),\
-               intra_entropy_loss.cpu().item(), std_intensities_experts, mean_intensities_experts
+               intra_entropy_loss.cpu().item()
 
     # Settings for plotting
+    num_examples_to_generate = 6
     START_GENERATING_IMG_FROM_IDX = 20
     # IDX_GENERATE = [23771, 18670, 23891, 23924, 23886, 32028]
     IDX_GENERATE = [1, 2, 3, 4, 5, 6]
 
     # Training loop
-    def train(train_loader, epochs, y_test):
+    def train(train_loader, epochs):
         history = []
         for epoch in range(epochs):
             start = time.time()
@@ -567,19 +550,11 @@ for _ in range(N_RUNS):
             n_chosen_experts_0 = []
             n_chosen_experts_1 = []
             n_chosen_experts_2 = []
-            std_intensities_experts_0 = []
-            std_intensities_experts_1 = []
-            std_intensities_experts_2 = []
-            mean_intensities_experts_0 = []
-            mean_intensities_experts_1 = []
-            mean_intensities_experts_2 = []
 
             # Iterate through both data loaders
             for batch in train_loader:
                 gen_loss_0, gen_loss_1, gen_loss_2, disc_loss, router_loss, div_loss, intensity_loss, \
-                aux_reg_loss, n_chosen_experts_batch, intra_entropy_loss, std_intensities_experts,\
-                mean_intensities_experts = train_step(batch)
-
+                aux_reg_loss, n_chosen_experts_batch, intra_entropy_loss = train_step(batch)
                 gen_loss_epoch_0.append(gen_loss_0)
                 gen_loss_epoch_1.append(gen_loss_1)
                 gen_loss_epoch_2.append(gen_loss_2)
@@ -591,31 +566,19 @@ for _ in range(N_RUNS):
                 n_chosen_experts_0.append(n_chosen_experts_batch[0])
                 n_chosen_experts_1.append(n_chosen_experts_batch[1])
                 n_chosen_experts_2.append(n_chosen_experts_batch[2])
-                intra_entropy_loss_epoch.append(intra_entropy_loss)  # [n_experts, BATCH_SIZE]
-                mean_intensities_experts_0.append(mean_intensities_experts[0])  # [n_experts, BATCH_SIZE]
-                mean_intensities_experts_1.append(mean_intensities_experts[1])  # [n_experts, BATCH_SIZE]
-                mean_intensities_experts_2.append(mean_intensities_experts[2])  # [n_experts, BATCH_SIZE]
-                # Calculate the aggregated standard deviation in one line
-                std_intensities_experts_0 = np.sqrt(np.mean(std_intensities_experts[0] ** 2))
-                std_intensities_experts_1 = np.sqrt(np.mean(std_intensities_experts[1] ** 2))
-                std_intensities_experts_2 = np.sqrt(np.mean(std_intensities_experts[2] ** 2))
+                intra_entropy_loss_epoch.append(intra_entropy_loss)
 
                 # disc_loss_epoch.append((disc_loss_0 + disc_loss_1 + disc_loss_2) / NUM_GENERATORS)
                 # router_loss_epoch.append((router_loss_0 + router_loss_1 + router_loss_2) / NUM_GENERATORS)
                 # div_loss_epoch.append((div_loss_0 + div_loss_1 + div_loss_2) / NUM_GENERATORS)
                 # intensity_loss_epoch.append((intensity_loss_0 + intensity_loss_1 + intensity_loss_2) / NUM_GENERATORS)
                 # aux_reg_loss_epoch.append((aux_reg_loss_0 + aux_reg_loss_1 + aux_reg_loss_2) / NUM_GENERATORS)
-            #
-            # TEST GENERATION
-            #
 
-            #
-            # Plot the example results
             # choose random element from generators
             random_generator = np.random.randint(0, NUM_GENERATORS)
             model = generators[random_generator]
             noise_cond = y_test[IDX_GENERATE]
-            noise = torch.randn(len(noise_cond), NOISE_DIM, device=device)
+            noise = torch.randn(num_examples_to_generate, NOISE_DIM, device=device)
             if epoch % 5 == 0:  # plot image each 5 epoch from random generator
                 plot = generate_and_save_images(model, epoch,
                                                 noise,
@@ -626,27 +589,11 @@ for _ in range(N_RUNS):
             else:
                 plot = None
 
-            # ws_values = []
-            # for batch in test_loader:
-            #     real_images, real_images_2, cond, std, intensity, true_positions, _ = batch
-            #     # use router to calculate choose the expert assignments for samples
-            #     cond = cond.to(device)
-            #     # std = std.to(device)
-            #     # intensity = intensity.to(device)
-            #     # true_positions = true_positions.to(device)
-
-            y_test = y_test.to(device)
-
-            # Test Router Network
-            with torch.no_grad():
-                router_network.eval()
-                predicted_expert_one_hot = router_network(y_test)
-
-            _, predicted_expert = torch.max(predicted_expert_one_hot, 1)
-
-            indices_expert_0 = np.where(predicted_expert.cpu().numpy() == 0)[0]
-            indices_expert_1 = np.where(predicted_expert.cpu().numpy() == 1)[0]
-            indices_expert_2 = np.where(predicted_expert.cpu().numpy() == 2)[0]
+            # Calculate Classification metrics for the router
+            y_test_tensor = torch.tensor(y_test, dtype=torch.float32).to(device)
+            expert_number_test_tensor = torch.tensor(expert_number_test, dtype=torch.long).to(device)
+            accuracy_avg, precision_avg, recall_avg, f1_avg = evaluate_router(router_network, y_test_tensor, expert_number_test_tensor,
+                                                                              accuracy_metric, precision_metric, recall_metric, f1_metric)
 
             # Calculate WS distance across all distribution
             ws_mean = calculate_joint_ws_across_experts(min(epoch // 5 + 1, 5),
@@ -656,9 +603,7 @@ for _ in range(N_RUNS):
                                                          y_test[indices_expert_2]],
                                                         generators, ch_org,
                                                         NOISE_DIM, device)
-            # ws_values.append(ws)
-            #
-            # ws_mean = np.array(ws_values).mean()
+
             epoch_time = time.time() - start
 
             # Log to WandB tool
@@ -671,17 +616,15 @@ for _ in range(N_RUNS):
                 'intensity_loss': np.mean(intensity_loss_epoch),
                 'router_loss': np.mean(router_loss_epoch),
                 'intra_entropy_loss_epoch': np.mean(intra_entropy_loss_epoch),
-                'std_intensities_experts_0': np.mean(std_intensities_experts_0),
-                'std_intensities_experts_1': np.mean(std_intensities_experts_1),
-                'std_intensities_experts_2': np.mean(std_intensities_experts_2),
-                'mean_intensities_experts_0': np.mean(mean_intensities_experts_0),
-                'mean_intensities_experts_1': np.mean(mean_intensities_experts_1),
-                'mean_intensities_experts_2': np.mean(mean_intensities_experts_2),
                 'disc_loss': np.mean(disc_loss_epoch),
                 'aux_reg_loss': np.mean(aux_reg_loss_epoch),
                 'n_choosen_experts_mean_epoch_0': np.mean(n_chosen_experts_0),
                 'n_choosen_experts_mean_epoch_1': np.mean(n_chosen_experts_1),
                 'n_choosen_experts_mean_epoch_2': np.mean(n_chosen_experts_2),
+                'accuracy': accuracy_avg,
+                'precision': precision_avg,
+                'recall': recall_avg,
+                'f1_score': f1_avg,
                 'epoch_time': epoch_time,
                 'epoch': epoch,
                 'plot': wandb.Image(plot) if plot else None
@@ -727,13 +670,6 @@ for _ in range(N_RUNS):
                                   torch.tensor(intensity_train), torch.tensor(positions_train),
                                   torch.tensor(expert_number_train))
     train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
-
-    test_dataset = TensorDataset(torch.tensor(x_test), torch.tensor(x_test_2),
-                                 torch.tensor(y_test), torch.tensor(std_test),
-                                 torch.tensor(intensity_test), torch.tensor(positions_test),
-                                 torch.tensor(expert_number_test))
-    test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=True)
-
     wandb.finish()
     wandb.init(
         project="Generative-DNN-for-CERN-Fast-Simulations",
@@ -743,4 +679,4 @@ for _ in range(N_RUNS):
         tags=[f"proton_min_{photon_sum_proton_min}", f"proton_max_{photon_sum_proton_max}", "sdi_gan_intensity"]
     )
 
-    history = train(train_loader, EPOCHS, y_test)
+    history = train(train_loader, EPOCHS)
