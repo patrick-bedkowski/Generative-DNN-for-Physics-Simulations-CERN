@@ -191,13 +191,13 @@ def calculate_joint_ws_across_experts(n_calc, x_tests: List, y_tests: List, gene
     for j in range(n_calc):  # Perform few calculations of the ws distance
         ch_gen_all = np.zeros(ch_org.shape)
         for generator_idx in range(len(generators)):
-            y_test = torch.tensor(y_tests[generator_idx], device=device)
+            y_test_temp = torch.tensor(y_tests[generator_idx], device=device)
             num_samples = x_tests[generator_idx].shape[0]
             num_batches = (num_samples + batch_size - 1) // batch_size  # Calculate number of batches
             results_all = np.zeros((num_samples, 56, 30))
 
         results_all = get_predictions_from_generator_results(num_batches, batch_size, num_samples, noise_dim,
-                                                             device, y_test, generators[generator_idx], results_all)
+                                                             device, y_test_temp, generators[generator_idx], results_all)
 
         ch_gen_smaller = pd.DataFrame(sum_channels_parallel(results_all)).values
         ch_gen_all = np.concatenate((ch_gen_all, ch_gen_smaller), axis=0)
@@ -385,13 +385,18 @@ def calculate_expert_distribution_loss(gating_probs, features, lambda_reg=0.1):
     Returns:
         torch.Tensor: The calculated regularization loss.
     """
-
+    # reshape the features from shape (batch_size) to (batch_size, 1)
     # Compute the pairwise Euclidean distance between the features
     pairwise_distances = torch.cdist(features, features, p=2)  # Shape: (batch_size, batch_size)
+    # print(pairwise_distances.shape)
+
+    # Assuming gating_probs is originally of type Long
+    # print(gating_probs.shape)
 
     # Compute the gating similarities (dot product of gating probabilities for each pair of samples)
     gating_similarities = torch.matmul(gating_probs, gating_probs.T)  # Shape: (batch_size, batch_size)
 
+    # print(gating_similarities.shape, pairwise_distances.shape)
     # Regularization loss: sum of (gating_similarities * pairwise_distances)
     reg_loss = torch.sum(gating_similarities * pairwise_distances) / gating_similarities.size(0)
 

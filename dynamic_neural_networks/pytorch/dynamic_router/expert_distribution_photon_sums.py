@@ -69,7 +69,7 @@ WS_MEAN_SAVE_THRESHOLD = 5
 DI_STRENGTH = 0.1
 IN_STRENGTH = 0.001
 AUX_STRENGTH = 0.1
-ED_STRENGTH = 1e0  # Strength on the expert distribution loss in the router loss calculation
+ED_STRENGTH = 1e-1  # Strength on the expert distribution loss in the router loss calculation
 
 GEN_STRENGTH = 1e-1  # Strength on the generator loss in the router loss calculation
 IN_ENTROPY_STRENGTH = 1e-1  # Strength on the intraentropy of photon sums in the router loss calculation
@@ -402,6 +402,7 @@ for _ in range(N_RUNS):
     # Adjust train_step function to work with the single discriminator
     def train_step(batch):
         real_images, real_images_2, cond, std, intensity, true_positions, _ = batch
+        batch_size = real_images.size(0)
 
         real_images = real_images.unsqueeze(1).to(device)
         # real_images_2 = real_images_2.unsqueeze(1).to(device)
@@ -429,7 +430,7 @@ for _ in range(N_RUNS):
         mean_intensities_experts = np.zeros(3)  # mean intensities for each expert for each batch
         std_intensities_experts = np.zeros(3)  # std intensities for each expert for each batch
         photonsum_entropy_experts = torch.zeros(3)  # entropy for each expert for each batch
-        mean_intensities_experts_batch = torch.zeros(BATCH_SIZE)  # entropy for each expert for each batch
+        mean_intensities_experts_batch = torch.zeros(batch_size, device=device)  # entropy for each expert for each batch
         aux_reg_losses = []
         disc_losses = []
 
@@ -452,10 +453,6 @@ for _ in range(N_RUNS):
 
             fake_images = generators[i](selected_noise, selected_cond).to(device)
             fake_images_2 = generators[i](selected_noise_2, selected_cond).to(device)
-
-            print(f'GEN {i}')
-            print(f"fake images shape: {fake_images.shape}")
-            print(f"fake images 2 shape: {fake_images_2.shape}")
 
             fake_output, fake_latent = discriminator(fake_images, selected_cond)
             fake_output_2, fake_latent_2 = discriminator(fake_images_2, selected_cond)
@@ -545,21 +542,24 @@ for _ in range(N_RUNS):
 
         # Router loss is the sum of the losses from the generators
         gen_loss_scaled = gen_losses.mean().clone() * GEN_STRENGTH
-        # expert_utilization_loss = expert_utilization_entropy * ENT_STRENGTH
+        expert_utilization_loss = expert_utilization_entropy * ENT_STRENGTH
 
-        expert_distribution_loss = calculate_expert_distribution_loss(predicted_expert, mean_intensities_experts_batch, ED_STRENGTH)
+        expert_distribution_loss = calculate_expert_distribution_loss(predicted_expert_one_hot.clone().detach().to(device),
+                                                                      mean_intensities_experts_batch.clone().detach().to(device).reshape(-1, 1),
+                                                                      ED_STRENGTH)
+
 
         router_loss = gen_loss_scaled.clone().detach().to(device) + expert_distribution_loss
         router_loss.requires_grad_(True)
 
         # Train Router Network
-        router_loss.backward()
+        router_loss.backward(retain_graph=True)
         router_optimizer.step()
 
         return gen_losses[0].item(), gen_losses[1].item(), gen_losses[2].item(),\
                total_disc_loss.item(), router_loss.item(), div_loss.cpu().item(),\
                intensity_loss.cpu().item(), aux_reg_loss.cpu().item(), class_counts.cpu().detach(),\
-               intra_entropy_loss.cpu().item(), std_intensities_experts, mean_intensities_experts, expert_distribution_loss
+               intra_entropy_loss.cpu().item(), std_intensities_experts, mean_intensities_experts, expert_distribution_loss.item()
 
     # Settings for plotting
     START_GENERATING_IMG_FROM_IDX = 20
@@ -589,12 +589,13 @@ for _ in range(N_RUNS):
             mean_intensities_experts_0 = []
             mean_intensities_experts_1 = []
             mean_intensities_experts_2 = []
+            expert_distributions = []
 
             # Iterate through both data loaders
             for batch in train_loader:
                 gen_loss_0, gen_loss_1, gen_loss_2, disc_loss, router_loss, div_loss, intensity_loss, \
                 aux_reg_loss, n_chosen_experts_batch, intra_entropy_loss, std_intensities_experts,\
-                mean_intensities_experts = train_step(batch)
+                mean_intensities_experts, expert_distribution_loss = train_step(batch)
 
                 gen_loss_epoch_0.append(gen_loss_0)
                 gen_loss_epoch_1.append(gen_loss_1)
@@ -611,6 +612,7 @@ for _ in range(N_RUNS):
                 mean_intensities_experts_0.append(mean_intensities_experts[0])  # [n_experts, BATCH_SIZE]
                 mean_intensities_experts_1.append(mean_intensities_experts[1])  # [n_experts, BATCH_SIZE]
                 mean_intensities_experts_2.append(mean_intensities_experts[2])  # [n_experts, BATCH_SIZE]
+                # expert_distributions.append(expert_distribution_loss)
                 # Calculate the aggregated standard deviation in one line
                 std_intensities_experts_0 = np.sqrt(np.mean(std_intensities_experts[0] ** 2))
                 std_intensities_experts_1 = np.sqrt(np.mean(std_intensities_experts[1] ** 2))
@@ -650,13 +652,12 @@ for _ in range(N_RUNS):
             #     # std = std.to(device)
             #     # intensity = intensity.to(device)
             #     # true_positions = true_positions.to(device)
-
-            y_test = torch.tensor(y_test, device=device)
+            y_test_temp = torch.tensor(y_test, device=device)
 
             # Test Router Network
             with torch.no_grad():
                 router_network.eval()
-                predicted_expert_one_hot = router_network(y_test)
+                predicted_expert_one_hot = router_network(y_test_temp)
 
             _, predicted_expert = torch.max(predicted_expert_one_hot, 1)
 
@@ -692,6 +693,7 @@ for _ in range(N_RUNS):
                 'mean_intensities_experts_0': np.mean(mean_intensities_experts_0),
                 'mean_intensities_experts_1': np.mean(mean_intensities_experts_1),
                 'mean_intensities_experts_2': np.mean(mean_intensities_experts_2),
+                'expert_distribution_loss': expert_distribution_loss,
                 'disc_loss': np.mean(disc_loss_epoch),
                 'aux_reg_loss': np.mean(aux_reg_loss_epoch),
                 'n_choosen_experts_mean_epoch_0': np.mean(n_chosen_experts_0),
