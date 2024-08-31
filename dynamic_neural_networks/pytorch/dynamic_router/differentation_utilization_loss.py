@@ -25,11 +25,13 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
 from utils import (sum_channels_parallel, calculate_ws_ch_proton_model,
-                   calculate_joint_ws_across_experts,
                    create_dir, save_scales, evaluate_router,
                    intensity_regularization, sdi_gan_regularization,
-                   generate_and_save_images)
-from torchmetrics.classification import MulticlassAccuracy, MulticlassPrecision, MulticlassRecall, MulticlassF1Score
+                   generate_and_save_images, regressor_loss,
+                   calculate_expert_utilization_entropy,
+                   calculate_joint_ws_across_experts)
+
+from models_pytorch import Generator, Discriminator, RouterNetwork, AuxReg
 
 
 print(torch.cuda.is_available())
@@ -47,20 +49,21 @@ AUX_STRENGTH = 0.1
 
 GEN_STRENGTH = 1e-1  # Strength on the generator loss in the router loss calculation
 DIFF_STRENGTH = 1e-5  # Differentation on the generator loss in the router loss calculation
-ENT_STRENGTH = 1e0
+UTIL_STRENGTH = 1e0
+
 N_RUNS = 2
+N_EXPERTS = 3
+BATCH_SIZE = 256
+NOISE_DIM = 10
+N_COND = 9  # number of conditional features
+EPOCHS = 200
+LR_G = 1e-4
+LR_D = 1e-5
+LR_R = 5e-4
+LR_A = 5e-5
+NAME = "differentation-utilization-loss"
 
 for _ in range(N_RUNS):
-    print("GEN_STRENGTH:", GEN_STRENGTH, "DIFF_STRENGTH:", DIFF_STRENGTH, "ENT_STRENGTH:", ENT_STRENGTH)
-    BATCH_SIZE = 256
-    NOISE_DIM = 10
-    EPOCHS = 200
-    LR_G = 1e-4
-    LR_D = 1e-5
-    LR_R = 1e-3
-    LR_A = 5e-5
-    NAME = f"differentation_{GEN_STRENGTH}_{DIFF_STRENGTH}-sdigan-intensity-aux-reg-1-disc-3-experts"
-
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     data = pd.read_pickle('/net/tscratch/people/plgpbedkowski/data/data_proton_photonsum_proton_1_2312.pkl')
     data_cond = pd.read_pickle('/net/tscratch/people/plgpbedkowski/data/data_cond_photonsum_proton_1_2312.pkl')
@@ -136,249 +139,30 @@ for _ in range(N_RUNS):
     org = np.exp(x_test) - 1
     ch_org = np.array(org).reshape(-1, 56, 30)
     del org
-
-    indices_expert_0 = np.where(expert_number_test == 0)[0]
-    indices_expert_1 = np.where(expert_number_test == 1)[0]
-    indices_expert_2 = np.where(expert_number_test == 2)[0]
-
     ch_org = pd.DataFrame(sum_channels_parallel(ch_org)).values
-
-
-    # Define the Generator model
-    class Generator(nn.Module):
-        def __init__(self, noise_dim, cond_dim):
-            super(Generator, self).__init__()
-            self.fc1 = nn.Sequential(
-                nn.Linear(noise_dim + cond_dim, 256),  # This should be 19 (10 + 9)
-                nn.BatchNorm1d(256),
-                nn.LeakyReLU(0.1),
-                nn.Dropout(0.2)
-            )
-            self.fc2 = nn.Sequential(
-                nn.Linear(256, 128 * 20 * 10),
-                nn.BatchNorm1d(128 * 20 * 10),
-                nn.LeakyReLU(0.1),
-                nn.Dropout(0.2)
-            )
-            self.upsample = nn.Upsample(scale_factor=(3, 2))
-            self.conv_layers = nn.Sequential(
-                nn.Conv2d(128, 256, kernel_size=(2, 2)),
-                nn.BatchNorm2d(256),
-                nn.LeakyReLU(0.1),
-                nn.Dropout(0.2),
-                nn.Upsample(scale_factor=(1, 2)),
-                nn.Conv2d(256, 128, kernel_size=(2, 2)),
-                nn.BatchNorm2d(128),
-                nn.LeakyReLU(0.1),
-                nn.Dropout(0.2),
-                nn.Conv2d(128, 64, kernel_size=(2, 2)),
-                nn.BatchNorm2d(64),
-                nn.LeakyReLU(0.1),
-                nn.Dropout(0.2),
-                nn.Conv2d(64, 1, kernel_size=(2, 7)),
-                nn.ReLU()
-            )
-
-        def forward(self, noise, cond):
-            x = torch.cat((noise, cond), dim=1)
-            x = self.fc1(x)
-            x = self.fc2(x)
-            x = x.view(-1, 128, 20, 10)
-            x = self.upsample(x)
-            x = self.conv_layers(x)
-            return x
-
-
-    # Define the Discriminator model
-    class Discriminator(nn.Module):
-        def __init__(self, cond_dim, num_generators):
-            super(Discriminator, self).__init__()
-            self.num_generators = num_generators
-            self.conv_layers = nn.Sequential(
-                nn.Conv2d(1, 32, kernel_size=(3, 3)),
-                nn.BatchNorm2d(32),
-                nn.LeakyReLU(0.1),
-                nn.Dropout(0.2),
-                nn.MaxPool2d(kernel_size=(2, 2)),
-                nn.Conv2d(32, 16, kernel_size=(3, 3)),
-                nn.BatchNorm2d(16),
-                nn.LeakyReLU(0.1),
-                nn.Dropout(0.2),
-                nn.MaxPool2d(kernel_size=(2, 1))
-            )
-            self.fc1 = nn.Sequential(
-                nn.Linear(16 * 12 * 12 + cond_dim, 128),
-                nn.BatchNorm1d(128),
-                nn.LeakyReLU(0.1),
-                nn.Dropout(0.2)
-            )
-            self.fc2 = nn.Sequential(
-                nn.Linear(128, 64),
-                nn.BatchNorm1d(64),
-                nn.LeakyReLU(0.1),
-                nn.Dropout(0.2)
-            )
-            self.fc3 = nn.Linear(64, self.num_generators)
-            self.sigmoid = nn.Sigmoid()
-
-        def forward(self, img, cond):
-            x = self.conv_layers(img)
-            x = x.view(x.size(0), -1)
-            x = torch.cat((x, cond), dim=1)
-            x = self.fc1(x)
-            latent = self.fc2(x)
-            out = self.fc3(latent)
-            out = self.sigmoid(out)
-            return out, latent
-
-
-    # Define the Router Network
-    class RouterNetwork(nn.Module):
-        def __init__(self, cond_dim):
-            super(RouterNetwork, self).__init__()
-            self.fc_layers = nn.Sequential(
-                nn.Linear(cond_dim, 128),
-                nn.LeakyReLU(0.1),
-                nn.Linear(128, 64),
-                nn.LeakyReLU(0.1),
-                nn.Linear(64, 32),
-                nn.LeakyReLU(0.1),
-                nn.Linear(32, 3),
-                nn.Softmax(dim=1)
-            )
-
-        def forward(self, cond):
-            return self.fc_layers(cond)
-
-
-    class AuxReg(nn.Module):
-        def __init__(self):
-            super(AuxReg, self).__init__()
-
-            self.conv3 = nn.Conv2d(1, 32, kernel_size=3)
-            self.conv3_bd = nn.Sequential(
-                nn.BatchNorm2d(32),
-                nn.Dropout(0.2),
-                nn.LeakyReLU(0.1)
-            )
-            self.pool3 = nn.MaxPool2d(kernel_size=(2, 2))
-
-            self.conv4 = nn.Conv2d(32, 64, kernel_size=3)
-            self.conv4_bd = nn.Sequential(
-                nn.BatchNorm2d(64),
-                nn.Dropout(0.2),
-                nn.LeakyReLU(0.1)
-            )
-            self.pool4 = nn.MaxPool2d(kernel_size=(2, 1))
-
-            self.conv5 = nn.Conv2d(64, 128, kernel_size=3)
-            self.conv5_bd = nn.Sequential(
-                nn.BatchNorm2d(128),
-                nn.Dropout(0.2),
-                nn.LeakyReLU(0.1)
-            )
-            self.pool5 = nn.MaxPool2d(kernel_size=(2, 1))
-
-            self.conv6 = nn.Conv2d(128, 256, kernel_size=3)
-            self.conv6_bd = nn.Sequential(
-                nn.BatchNorm2d(256),
-                nn.Dropout(0.2),
-                nn.LeakyReLU(0.1)
-            )
-
-            self.flatten = nn.Flatten()
-            self.dense = nn.Linear(256 * 3 * 8, 2)  # Adjust the input dimension based on your input image size
-
-        def forward(self, x):
-            x = self.conv3(x)
-            x = self.conv3_bd(x)
-            x = self.pool3(x)
-
-            x = self.conv4(x)
-            x = self.conv4_bd(x)
-            x = self.pool4(x)
-
-            x = self.conv5(x)
-            x = self.conv5_bd(x)
-            x = self.pool5(x)
-
-            x = self.conv6(x)
-            x = self.conv6_bd(x)
-
-            x = self.flatten(x)
-            x = self.dense(x)
-
-            return x
-
-    # Define the loss function
-    def regressor_loss(real_coords, fake_coords, AUX_STRENGTH):
-        # Move fake_coords to CPU and convert to NumPy array
-        fake_coords_cpu = fake_coords.cpu().detach().numpy()
-
-        # Transform using the scaler
-        fake_coords_scaled = scaler_poz.transform(fake_coords_cpu)
-
-        # Convert back to tensor and move to the appropriate device
-        fake_coords_scaled = torch.tensor(fake_coords_scaled).to(real_coords.device)
-
-        # Compute the MAE loss
-        return F.l1_loss(fake_coords_scaled, real_coords) * AUX_STRENGTH
-
 
     # Loss and optimizer
     generator_criterion = nn.BCELoss()
     discriminator_criterion = nn.BCELoss()
     router_criterion = nn.CrossEntropyLoss()
     aux_reg_criterion = regressor_loss
-    generator0 = Generator(NOISE_DIM, 9).to(device)
-    generator1 = Generator(NOISE_DIM, 9).to(device)
-    generator2 = Generator(NOISE_DIM, 9).to(device)
-    router_network = RouterNetwork(9).to(device)
 
-    generators = [generator0, generator1, generator2]
+    # Define experts
+    generators = []
+    for generator_idx in range(N_EXPERTS):
+        generators.append(Generator(NOISE_DIM, N_COND).to(device))
     generator_optimizers = [optim.Adam(gen.parameters(), lr=LR_G) for gen in generators]
 
-    NUM_GENERATORS = len(generators)
     # Initialize single discriminator
-    discriminator = Discriminator(9, NUM_GENERATORS).to(device)
+    discriminator = Discriminator(N_COND, N_EXPERTS).to(device)
     discriminator_optimizer = optim.Adam(discriminator.parameters(), lr=LR_D)
 
+    router_network = RouterNetwork(N_COND).to(device)
     router_optimizer = optim.Adam(router_network.parameters(), lr=LR_R)
 
-    # Example usage
+    # Define Auxiliary regressor
     aux_reg = AuxReg().to(device)
     aux_reg_optimizer = optim.Adam(aux_reg.parameters(), lr=LR_A)
-
-    # Initialize metrics
-    accuracy_metric = MulticlassAccuracy(num_classes=NUM_GENERATORS).to(device)
-    precision_metric = MulticlassPrecision(num_classes=NUM_GENERATORS, average='macro').to(device)
-    recall_metric = MulticlassRecall(num_classes=NUM_GENERATORS, average='macro').to(device)
-    f1_metric = MulticlassF1Score(num_classes=NUM_GENERATORS, average='macro').to(device)
-
-
-    def calculate_entropy(p):
-        """
-        Calculate entropy of a probability distribution p.
-        """
-        return -torch.sum(p * torch.log(p + 1e-9), dim=-1)
-
-
-    def calculate_expert_utilization_entropy(gating_probs):
-        """
-        Calculate the expert utilization entropy H_u.
-
-        Parameters:
-        gating_probs (torch.Tensor): A tensor of shape (N, M) where N is the number of samples
-                                     and M is the number of experts. Each entry is the gating
-                                     probability of an expert for a given sample.
-
-        Returns:
-        torch.Tensor: The entropy of the average gating probabilities.
-        """
-        avg_gating_probs = torch.mean(gating_probs, dim=0)  # Average over samples
-        entropy = calculate_entropy(avg_gating_probs)
-        return entropy
-
 
     # Adjust train_step function to work with the single discriminator
     def train_step(batch):
@@ -392,28 +176,26 @@ for _ in range(N_RUNS):
         true_positions = true_positions.to(device)
 
         # Train Router Network
-        router_optimizer.zero_grad()
         predicted_expert_one_hot = router_network(cond)
 
-        expert_utilization_entropy = calculate_expert_utilization_entropy(predicted_expert_one_hot)
+        expert_utilization_entropy = calculate_expert_utilization_entropy(predicted_expert_one_hot, UTIL_STRENGTH)
 
         _, predicted_expert = torch.max(predicted_expert_one_hot, 1)
-        class_counts = torch.zeros(NUM_GENERATORS, dtype=torch.float).to(device)
-
-        for class_label in range(NUM_GENERATORS):
+        class_counts = torch.zeros(N_EXPERTS, dtype=torch.float).to(device)
+        for class_label in range(N_EXPERTS):
             class_counts[class_label] = (predicted_expert == class_label).sum().item()
-
         class_counts_adjusted = class_counts / predicted_expert.size(0)
 
         noise = torch.randn(BATCH_SIZE, NOISE_DIM, device=device)
         noise_2 = torch.randn(BATCH_SIZE, NOISE_DIM, device=device)
 
         gen_losses = torch.zeros(3)
-        mu = torch.zeros(3)  # mean intensities for each expert for each batch
+        mean_intensities_experts = torch.zeros(3)  # mean intensities for each expert for each batch
+        std_intensities_experts = torch.zeros(3)  # std intensities for each expert for each batch
         aux_reg_losses = []
         disc_losses = []
 
-        for i in range(NUM_GENERATORS):
+        for i in range(N_EXPERTS):
             generator_optimizers[i].zero_grad()
             selected_indices = (predicted_expert == i).nonzero(as_tuple=True)[0]
             if selected_indices.numel() <= 1:
@@ -421,10 +203,10 @@ for _ in range(N_RUNS):
                 continue
 
             # Clone or detach tensors to avoid in-place modifications
-            selected_noise = noise[selected_indices].clone().detach()
-            selected_noise_2 = noise_2[selected_indices].clone().detach()
-            selected_cond = cond[selected_indices].clone().detach()
-            selected_real_images = real_images[selected_indices].clone().detach()
+            selected_noise = noise[selected_indices].clone()
+            selected_noise_2 = noise_2[selected_indices].clone()
+            selected_cond = cond[selected_indices].clone()
+            selected_real_images = real_images[selected_indices].clone()
 
             fake_images = generators[i](selected_noise, selected_cond).to(device)
             fake_images_2 = generators[i](selected_noise_2, selected_cond).to(device)
@@ -436,15 +218,32 @@ for _ in range(N_RUNS):
             div_loss = sdi_gan_regularization(fake_latent, fake_latent_2,
                                               selected_noise, selected_noise_2,
                                               std[selected_indices].clone().detach(), DI_STRENGTH)
-            intensity_loss, mean_intensity = intensity_regularization(fake_images, intensity[selected_indices].clone().detach(),
-                                                                      scaler_intensity, IN_STRENGTH)
+
+            intensity_loss, mean_intenisties, std_intensity, mean_intensity = intensity_regularization(fake_images,
+                                                                                                       intensity[
+                                                                                                           selected_indices].clone().detach().to(
+                                                                                                           device),
+                                                                                                       scaler_intensity,
+                                                                                                       IN_STRENGTH)
             gen_loss = gen_loss + div_loss + intensity_loss
 
-            mu[i] = mean_intensity
+            #
+            # Calculate Expert Specialization
+            #
+            mean_intensities_experts[i] = mean_intensity
+            std_intensities_experts[i] = std_intensity
+            # calculate the cond values specification, mean, std, min, max for selected cond
+            # mean_cond = selected_cond.mean()
+            # std_cond = selected_cond.std()
+            # min_cond = selected_cond.min()
+            # max_cond = selected_cond.max()
+            # calculate the min max values of pixels on the generated images
+            # min_pixel, max_pixel = fake_images.min(), fake_images.max()
 
+            generator_optimizers[i].zero_grad()
             # scale learning rate:
             generator_optimizers[i].param_groups[0]['lr'] = LR_G * class_counts_adjusted[i].clone().detach()
-            gen_loss.backward()
+            gen_loss.backward(retain_graph=True)
             generator_optimizers[i].step()
             gen_losses[i] = gen_loss.clone().detach().to(device)
 
@@ -452,26 +251,25 @@ for _ in range(N_RUNS):
             real_labels = torch.ones_like(real_output).clone().detach()
             loss_real_disc = discriminator_criterion(real_output, real_labels)
 
-            fake_output, fake_latent = discriminator(fake_images.detach().clone(), selected_cond.detach().clone())
+            fake_output, fake_latent = discriminator(fake_images.clone().detach(), selected_cond.clone().detach())
             fake_labels = torch.zeros_like(fake_output).clone().detach()
             loss_fake_disc = discriminator_criterion(fake_output, fake_labels)
 
             disc_loss = (loss_real_disc + loss_fake_disc) / 2
             disc_losses.append(disc_loss)
 
-            generated_positions = aux_reg(fake_images.detach().clone())
+            generated_positions = aux_reg(fake_images.clone().detach())
 
             # Ensure true_positions and generated_positions require grad
             selected_true_positions = true_positions[selected_indices].clone().detach()
             selected_true_positions.requires_grad_(True)
             generated_positions.requires_grad_(True)
 
-            aux_reg_loss = aux_reg_criterion(selected_true_positions, generated_positions, AUX_STRENGTH)
+            aux_reg_loss = aux_reg_criterion(selected_true_positions, generated_positions, scaler_poz, AUX_STRENGTH)
             aux_reg_loss = aux_reg_loss * class_counts_adjusted[i].clone().detach()
             aux_reg_losses.append(aux_reg_loss)
 
         aux_reg_loss = torch.stack(aux_reg_losses).mean()
-
         aux_reg_optimizer.zero_grad()
         aux_reg_loss.backward()
         aux_reg_optimizer.step()
@@ -483,20 +281,26 @@ for _ in range(N_RUNS):
         discriminator_optimizer.step()
 
         # Router loss is the sum of the losses from the generators
-        differentation_loss = (- (mu[0] - mu[1]) ** 2 - (mu[0] - mu[2]) ** 2 - (mu[1] - mu[2]) ** 2) * DIFF_STRENGTH
         gen_loss_scaled = gen_losses.mean().clone() * GEN_STRENGTH
-        expert_utilization_loss = expert_utilization_entropy * ENT_STRENGTH
-        router_loss = gen_loss_scaled + differentation_loss - expert_utilization_loss
-        router_loss.requires_grad_(True)
+        mean_intensity_detached = mean_intensities_experts
+        # Use the detached tensor in the router loss
+        differentiation_loss = - (mean_intensity_detached[0] - mean_intensity_detached[1]) ** 2 \
+                               - (mean_intensity_detached[0] - mean_intensity_detached[2]) ** 2 \
+                               - (mean_intensity_detached[1] - mean_intensity_detached[2]) ** 2
+
+        differentiation_loss = differentiation_loss * DIFF_STRENGTH
+        router_loss = gen_loss_scaled + differentiation_loss - expert_utilization_entropy
 
         # Train Router Network
-        router_loss.backward()
+        router_optimizer.zero_grad()
+        router_loss.backward(retain_graph=True)
         router_optimizer.step()
 
-        return gen_losses[0].item(), gen_losses[1].item(), gen_losses[2].item(),\
-               total_disc_loss.item(), router_loss.item(), div_loss.cpu().item(),\
-               intensity_loss.cpu().item(), aux_reg_loss.cpu().item(), class_counts.cpu().detach(),\
-               differentation_loss.cpu().item(), expert_utilization_loss.cpu().item()
+        return gen_losses[0].item(), gen_losses[1].item(), gen_losses[2].item(), \
+               total_disc_loss.item(), router_loss.item(), div_loss.cpu().item(), \
+               intensity_loss.cpu().item(), aux_reg_loss.cpu().item(), class_counts.cpu().detach(), \
+               std_intensities_experts.detach().numpy(), mean_intensities_experts.detach().numpy(), \
+               differentiation_loss.cpu().item(), expert_utilization_entropy.cpu().item()
 
     # Settings for plotting
     num_examples_to_generate = 6
@@ -505,7 +309,7 @@ for _ in range(N_RUNS):
     IDX_GENERATE = [1, 2, 3, 4, 5, 6]
 
     # Training loop
-    def train(train_loader, epochs):
+    def train(train_loader, epochs, y_test):
         history = []
         for epoch in range(epochs):
             start = time.time()
@@ -522,11 +326,19 @@ for _ in range(N_RUNS):
             n_chosen_experts_0 = []
             n_chosen_experts_1 = []
             n_chosen_experts_2 = []
+            std_intensities_experts_0 = []
+            std_intensities_experts_1 = []
+            std_intensities_experts_2 = []
+            mean_intensities_experts_0 = []
+            mean_intensities_experts_1 = []
+            mean_intensities_experts_2 = []
 
             # Iterate through both data loaders
             for batch in train_loader:
                 gen_loss_0, gen_loss_1, gen_loss_2, disc_loss, router_loss, div_loss, intensity_loss, \
-                aux_reg_loss, n_chosen_experts_batch, differentation_loss, utilization_loss = train_step(batch)
+                aux_reg_loss, n_chosen_experts_batch, std_intensities_experts, \
+                mean_intensities_experts, differentation_loss, utilization_loss = train_step(batch)
+
                 gen_loss_epoch_0.append(gen_loss_0)
                 gen_loss_epoch_1.append(gen_loss_1)
                 gen_loss_epoch_2.append(gen_loss_2)
@@ -538,6 +350,14 @@ for _ in range(N_RUNS):
                 n_chosen_experts_0.append(n_chosen_experts_batch[0])
                 n_chosen_experts_1.append(n_chosen_experts_batch[1])
                 n_chosen_experts_2.append(n_chosen_experts_batch[2])
+                mean_intensities_experts_0.append(mean_intensities_experts[0])  # [n_experts, BATCH_SIZE]
+                mean_intensities_experts_1.append(mean_intensities_experts[1])  # [n_experts, BATCH_SIZE]
+                mean_intensities_experts_2.append(mean_intensities_experts[2])  # [n_experts, BATCH_SIZE]
+                # expert_distributions.append(expert_distribution_loss)
+                # Calculate the aggregated standard deviation in one line
+                std_intensities_experts_0 = np.sqrt(np.mean(std_intensities_experts[0] ** 2))
+                std_intensities_experts_1 = np.sqrt(np.mean(std_intensities_experts[1] ** 2))
+                std_intensities_experts_2 = np.sqrt(np.mean(std_intensities_experts[2] ** 2))
                 differentation_loss_epoch.append(differentation_loss)
                 utilization_loss_epoch.append(utilization_loss)
 
@@ -548,7 +368,7 @@ for _ in range(N_RUNS):
                 # aux_reg_loss_epoch.append((aux_reg_loss_0 + aux_reg_loss_1 + aux_reg_loss_2) / NUM_GENERATORS)
 
             # choose random element from generators
-            random_generator = np.random.randint(0, NUM_GENERATORS)
+            random_generator = np.random.randint(0, N_EXPERTS)
             model = generators[random_generator]
             noise_cond = y_test[IDX_GENERATE]
             noise = torch.randn(num_examples_to_generate, NOISE_DIM, device=device)
@@ -562,11 +382,23 @@ for _ in range(N_RUNS):
             else:
                 plot = None
 
-            # Calculate Classification metrics for the router
-            y_test_tensor = torch.tensor(y_test, dtype=torch.float32).to(device)
-            expert_number_test_tensor = torch.tensor(expert_number_test, dtype=torch.long).to(device)
-            accuracy_avg, precision_avg, recall_avg, f1_avg = evaluate_router(router_network, y_test_tensor, expert_number_test_tensor,
-                                                                              accuracy_metric, precision_metric, recall_metric, f1_metric)
+            y_test_temp = torch.tensor(y_test, device=device)
+            # Test Router Network
+            with torch.no_grad():
+                router_network.eval()
+                predicted_expert_one_hot = router_network(y_test_temp)
+
+            _, predicted_expert = torch.max(predicted_expert_one_hot, 1)
+
+            indices_expert_0 = np.where(predicted_expert.cpu().numpy() == 0)[0]
+            indices_expert_1 = np.where(predicted_expert.cpu().numpy() == 1)[0]
+            indices_expert_2 = np.where(predicted_expert.cpu().numpy() == 2)[0]
+
+            print('---------------------')
+            print(len(indices_expert_0))
+            print(len(indices_expert_1))
+            print(len(indices_expert_2))
+            print('---------------------')
 
             # Calculate WS distance across all distribution
             ws_mean = calculate_joint_ws_across_experts(min(epoch // 5 + 1, 5),
@@ -595,10 +427,12 @@ for _ in range(N_RUNS):
                 'n_choosen_experts_mean_epoch_0': np.mean(n_chosen_experts_0),
                 'n_choosen_experts_mean_epoch_1': np.mean(n_chosen_experts_1),
                 'n_choosen_experts_mean_epoch_2': np.mean(n_chosen_experts_2),
-                'accuracy': accuracy_avg,
-                'precision': precision_avg,
-                'recall': recall_avg,
-                'f1_score': f1_avg,
+                'std_intensities_experts_0': np.mean(std_intensities_experts_0),
+                'std_intensities_experts_1': np.mean(std_intensities_experts_1),
+                'std_intensities_experts_2': np.mean(std_intensities_experts_2),
+                'mean_intensities_experts_0': np.mean(mean_intensities_experts_0),
+                'mean_intensities_experts_1': np.mean(mean_intensities_experts_1),
+                'mean_intensities_experts_2': np.mean(mean_intensities_experts_2),
                 'epoch_time': epoch_time,
                 'epoch': epoch,
                 'plot': wandb.Image(plot) if plot else None
@@ -626,7 +460,7 @@ for _ in range(N_RUNS):
         "auxiliary_strength": AUX_STRENGTH,
         "Generator_strength": GEN_STRENGTH,
         "Differentation_strength": DIFF_STRENGTH,
-        "Utilization_strength": ENT_STRENGTH,
+        "Utilization_strength": UTIL_STRENGTH,
         "Learning rate_generator": LR_G,
         "Learning rate_discriminator": LR_D,
         "Learning rate_router": LR_R,
@@ -634,7 +468,7 @@ for _ in range(N_RUNS):
         "Experiment_dir_name": EXPERIMENT_DIR_NAME,
         "Batch_size": BATCH_SIZE,
         "Noise_dim": NOISE_DIM,
-        "router_arch": "64-64-32-16",
+        "router_arch": "128-64-32-16",
         "intensity_loss_type": "mae"
     }
 
@@ -645,6 +479,13 @@ for _ in range(N_RUNS):
                                   torch.tensor(intensity_train), torch.tensor(positions_train),
                                   torch.tensor(expert_number_train))
     train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
+
+    test_dataset = TensorDataset(torch.tensor(x_test), torch.tensor(x_test_2),
+                                     torch.tensor(y_test), torch.tensor(std_test),
+                                     torch.tensor(intensity_test), torch.tensor(positions_test),
+                                     torch.tensor(expert_number_test))
+    test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=True)
+
     wandb.finish()
     wandb.init(
         project="Generative-DNN-for-CERN-Fast-Simulations",
@@ -654,4 +495,4 @@ for _ in range(N_RUNS):
         tags=[f"proton_min_{photon_sum_proton_min}", f"proton_max_{photon_sum_proton_max}", "sdi_gan_intensity"]
     )
 
-    history = train(train_loader, EPOCHS)
+    history = train(train_loader, EPOCHS, y_test)

@@ -196,11 +196,13 @@ def calculate_joint_ws_across_experts(n_calc, x_tests: List, y_tests: List, gene
             num_batches = (num_samples + batch_size - 1) // batch_size  # Calculate number of batches
             results_all = np.zeros((num_samples, 56, 30))
 
-        results_all = get_predictions_from_generator_results(num_batches, batch_size, num_samples, noise_dim,
-                                                             device, y_test_temp, generators[generator_idx], results_all)
+            if num_samples == 0:
+                continue
+            results_all = get_predictions_from_generator_results(num_batches, batch_size, num_samples, noise_dim,
+                                                                 device, y_test_temp, generators[generator_idx], results_all)
 
-        ch_gen_smaller = pd.DataFrame(sum_channels_parallel(results_all)).values
-        ch_gen_all = np.concatenate((ch_gen_all, ch_gen_smaller), axis=0)
+            ch_gen_smaller = pd.DataFrame(sum_channels_parallel(results_all)).values
+            ch_gen_all = np.concatenate((ch_gen_all, ch_gen_smaller), axis=0)
 
         for i in range(5):
             ws[i] = ws[i] + wasserstein_distance(ch_org[:, i], ch_gen_all[:, i])
@@ -230,6 +232,21 @@ def get_predictions_from_generator_results(num_batches, batch_size, num_samples,
         results = np.exp(results) - 1
         results_all[start_idx:end_idx] = results.reshape(-1, 56, 30)
     return results_all
+
+
+# Define the loss function
+def regressor_loss(real_coords, fake_coords, scaler_poz, AUX_STRENGTH):
+    # Move fake_coords to CPU and convert to NumPy array
+    fake_coords_cpu = fake_coords.cpu().detach().numpy()
+
+    # Transform using the scaler
+    fake_coords_scaled = scaler_poz.transform(fake_coords_cpu)
+
+    # Convert back to tensor and move to the appropriate device
+    fake_coords_scaled = torch.tensor(fake_coords_scaled).to(real_coords.device)
+
+    # Compute the MAE loss
+    return F.l1_loss(fake_coords_scaled, real_coords) * AUX_STRENGTH
 
 
 def calculate_ws_ch_proton_model(n_calc, x_test, y_test, generator,
@@ -311,31 +328,31 @@ def intensity_regularization(gen_im_proton, intensity_proton, scaler_intensity, 
         torch.Tensor: The intensity regularization loss, calculated as the Mean Absolute Error (MAE) between the scaled
                       sum of the intensities in the generated images and the target intensities, multiplied by `IN_STRENGTH`.
         torch.Tensor: The sum of intensities in each generated image, with shape [n_samples, 1].
-        float: The standard deviation of the scaled intensity values across the batch.
-        float: The mean of the scaled intensity values across the batch.
+        torch.Tensor: The standard deviation of the scaled intensity values across the batch.
+        torch.Tensor: The mean of the scaled intensity values across the batch.
     """
 
     # Sum the intensities in the generated images
     sum_all_axes_p = torch.sum(gen_im_proton, dim=[2, 3], keepdim=True)  # Sum along all but batch dimension
     sum_all_axes_p = sum_all_axes_p.reshape(-1, 1)  # Scale and reshape back to (batch_size, 1)
 
-    # Transform sum_all_axes_p using scaler_intensity
-    sum_all_axes_p_np = sum_all_axes_p.cpu().detach().numpy()  # Convert to numpy array
-    # mean_intensity = sum_all_axes_p.mean()
+    # Manually scale using the parameters from the fitted MinMaxScaler
+    data_min = torch.tensor(scaler_intensity.data_min_, device=gen_im_proton.device, dtype=torch.float32)
+    data_max = torch.tensor(scaler_intensity.data_max_, device=gen_im_proton.device, dtype=torch.float32)
 
-    sum_all_axes_p_scaled = scaler_intensity.transform(sum_all_axes_p_np)
-    std_intensity_scaled, mean_intensity_scaled = sum_all_axes_p_scaled.std(), sum_all_axes_p_scaled.mean()
+    sum_all_axes_p_scaled = (sum_all_axes_p - data_min) / (data_max - data_min)
 
-    # Convert back to tensor and move to the correct device
-    sum_all_axes_p_scaled = torch.tensor(sum_all_axes_p_scaled, dtype=torch.float32).to(gen_im_proton.device)
+    sum_all_pixels = sum_all_axes_p_scaled.clone()
+    # Compute mean and std as PyTorch tensors
+    std_intensity_scaled = sum_all_pixels.std()
+    mean_intensity_scaled = sum_all_pixels.mean()
 
     # Ensure intensity_proton is correctly shaped and on the same device
     intensity_proton = intensity_proton.view(-1, 1).to(gen_im_proton.device)  # Ensure it is of shape [batch_size, 1]
 
     # Calculate MAE loss
     mae_value_p = F.l1_loss(sum_all_axes_p_scaled, intensity_proton)
-
-    return IN_STRENGTH * mae_value_p, sum_all_axes_p, std_intensity_scaled, mean_intensity_scaled
+    return IN_STRENGTH * mae_value_p, sum_all_axes_p, std_intensity_scaled.detach(), mean_intensity_scaled.detach()
 
 
 def generate_and_save_images(model, epoch, noise, noise_cond, x_test,
@@ -404,4 +421,30 @@ def calculate_expert_distribution_loss(gating_probs, features, lambda_reg=0.1):
     reg_loss = lambda_reg * reg_loss
 
     return reg_loss
+
+
+def calculate_entropy(p):
+    """
+    Calculate entropy of a probability distribution p.
+    """
+    return -torch.sum(p * torch.log(p + 1e-9), dim=-1)
+
+
+def calculate_expert_utilization_entropy(gating_probs, ENT_STRENGTH=0.1):
+    """
+    Calculate the expert utilization entropy H_u.
+
+    Parameters:
+    gating_probs (torch.Tensor): A tensor of shape (N, M) where N is the number of samples
+                                 and M is the number of experts. Each entry is the gating
+                                 probability of an expert for a given sample.
+
+    Returns:
+    torch.Tensor: The entropy of the average gating probabilities.
+    """
+    avg_gating_probs = torch.mean(gating_probs, dim=0)  # Average over samples
+    entropy = calculate_entropy(avg_gating_probs)
+    return entropy * ENT_STRENGTH
+
+
 
