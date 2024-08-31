@@ -177,7 +177,7 @@ def save_scales(model_name, scaler_means, scaler_scales, filepath):
 #     return ws_mean
 
 def calculate_joint_ws_across_experts(n_calc, x_tests: List, y_tests: List, generators: List,
-                                      ch_org, noise_dim, device, batch_size=64):
+                                      ch_org, ch_org_expert, noise_dim, device, batch_size=64):
     """
     Calculates the WS distance across the whole distribution.
     """
@@ -187,9 +187,10 @@ def calculate_joint_ws_across_experts(n_calc, x_tests: List, y_tests: List, gene
 
     # gather all predictions
     ws = np.zeros(5)
-
+    ws_exp = np.zeros((3, 5))  # ws for each expert
     for j in range(n_calc):  # Perform few calculations of the ws distance
         ch_gen_all = np.zeros(ch_org.shape)
+        ch_gen_expert = []
         for generator_idx in range(len(generators)):
             y_test_temp = torch.tensor(y_tests[generator_idx], device=device)
             num_samples = x_tests[generator_idx].shape[0]
@@ -202,17 +203,27 @@ def calculate_joint_ws_across_experts(n_calc, x_tests: List, y_tests: List, gene
                                                                  device, y_test_temp, generators[generator_idx], results_all)
 
             ch_gen_smaller = pd.DataFrame(sum_channels_parallel(results_all)).values
+            ch_gen_expert.append(ch_gen_smaller.copy())
             ch_gen_all = np.concatenate((ch_gen_all, ch_gen_smaller), axis=0)
 
         for i in range(5):
             ws[i] = ws[i] + wasserstein_distance(ch_org[:, i], ch_gen_all[:, i])
+            # Calculate separate WS distance for expert
+            for exp_idx in range(len(generators)):
+                ws_exp[exp_idx][i] += wasserstein_distance(ch_org_expert[exp_idx][:, i], ch_gen_expert[exp_idx][:, i])
+
         ws = np.array(ws)  # across 5 runs
-    ws = ws / n_calc  # average per channel
+        ws_exp = np.array(ws_exp)  # across 5 runs
+    ws = ws / n_calc  # average per calculation
+    ws_exp = ws_exp / n_calc  # average per calculation
     ws_mean = ws.mean()
+    ws_mean_0 = ws_exp[0].mean()
+    ws_mean_1 = ws_exp[1].mean()
+    ws_mean_2 = ws_exp[2].mean()
     print("ws mean", f'{ws_mean:.2f}', end=" ")
     for n, score in enumerate(ws):
         print("ch" + str(n + 1), f'{score:.2f}', end=" ")
-    return ws_mean
+    return ws_mean, ws_mean_0, ws_mean_1, ws_mean_2
 
 
 def get_predictions_from_generator_results(num_batches, batch_size, num_samples, noise_dim,
@@ -336,17 +347,23 @@ def intensity_regularization(gen_im_proton, intensity_proton, scaler_intensity, 
     sum_all_axes_p = torch.sum(gen_im_proton, dim=[2, 3], keepdim=True)  # Sum along all but batch dimension
     sum_all_axes_p = sum_all_axes_p.reshape(-1, 1)  # Scale and reshape back to (batch_size, 1)
 
+    # Sum the intensities in the generated images
+    gen_im_proton_rescaled = torch.exp(gen_im_proton.clone().detach()) - 1
+    sum_all_axes_p_rescaled = torch.sum(gen_im_proton_rescaled, dim=[2, 3], keepdim=True)  # Sum along all but batch dimension
+    sum_all_axes_p_rescaled = sum_all_axes_p_rescaled.reshape(-1, 1)  # Scale and reshape back to (batch_size, 1)
+
+    # Compute mean and std as PyTorch tensors
+    std_intensity_scaled = sum_all_axes_p_rescaled.std()
+    mean_intensity_scaled = sum_all_axes_p_rescaled.mean()
+    # remove the log from the predictions
+    # print(sum_all_axes_p_rescaled)
+    # print(mean_intensity_scaled)
+
     # Manually scale using the parameters from the fitted MinMaxScaler
     data_min = torch.tensor(scaler_intensity.data_min_, device=gen_im_proton.device, dtype=torch.float32)
     data_max = torch.tensor(scaler_intensity.data_max_, device=gen_im_proton.device, dtype=torch.float32)
 
     sum_all_axes_p_scaled = (sum_all_axes_p - data_min) / (data_max - data_min)
-
-    sum_all_pixels = sum_all_axes_p_scaled.clone()
-    # Compute mean and std as PyTorch tensors
-    std_intensity_scaled = sum_all_pixels.std()
-    mean_intensity_scaled = sum_all_pixels.mean()
-
     # Ensure intensity_proton is correctly shaped and on the same device
     intensity_proton = intensity_proton.view(-1, 1).to(gen_im_proton.device)  # Ensure it is of shape [batch_size, 1]
 

@@ -71,7 +71,7 @@ IN_STRENGTH = 0.001
 AUX_STRENGTH = 0.1
 
 # Router loss parameters
-ED_STRENGTH = 1e-3  # Strength on the expert distribution loss in the router loss calculation
+ED_STRENGTH = 1e-2  # Strength on the expert distribution loss in the router loss calculation
 GEN_STRENGTH = 1e-1  # Strength on the generator loss in the router loss calculation
 IN_ENTROPY_STRENGTH = 1e-1  # Strength on the intraentropy of photon sums in the router loss calculation
 ENT_STRENGTH = 1e1  # Strength on the expert utilization entropy in the router loss calculation
@@ -86,7 +86,7 @@ LR_G = 1e-4
 LR_D = 1e-5
 LR_R = 5e-4
 LR_A = 5e-5
-NAME = f"expert_distribution_loss_test"
+NAME = f"expert_distribution_loss_test_{ED_STRENGTH}_{GEN_STRENGTH}"
 
 for _ in range(N_RUNS):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -446,14 +446,33 @@ for _ in range(N_RUNS):
             indices_expert_1 = np.where(predicted_expert.cpu().numpy() == 1)[0]
             indices_expert_2 = np.where(predicted_expert.cpu().numpy() == 2)[0]
 
+            # calculate the ch_org for the test dataset for each expert
+            org_0 = np.exp(x_test[indices_expert_0]) - 1
+            ch_org_0 = np.array(org_0).reshape(-1, 56, 30)
+            del org_0
+            ch_org_0 = pd.DataFrame(sum_channels_parallel(ch_org_0)).values
+
+            org_1 = np.exp(x_test[indices_expert_1]) - 1
+            ch_org_1 = np.array(org_1).reshape(-1, 56, 30)
+            del org_1
+            ch_org_1 = pd.DataFrame(sum_channels_parallel(ch_org_1)).values
+
+            org_2 = np.exp(x_test[indices_expert_2]) - 1
+            ch_org_2 = np.array(org_2).reshape(-1, 56, 30)
+            del org_2
+            ch_org_2 = pd.DataFrame(sum_channels_parallel(ch_org_2)).values
+
             # Calculate WS distance across all distribution
-            ws_mean = calculate_joint_ws_across_experts(min(epoch // 5 + 1, 5),
-                                                        [x_test[indices_expert_0], x_test[indices_expert_1],
-                                                         x_test[indices_expert_2]],
-                                                        [y_test[indices_expert_0], y_test[indices_expert_1],
-                                                         y_test[indices_expert_2]],
-                                                        generators, ch_org,
-                                                        NOISE_DIM, device)
+            ws_mean, ws_mean_0, ws_mean_1, ws_mean_2 = calculate_joint_ws_across_experts(min(epoch // 5 + 1, 5),
+                                                                                         [x_test[indices_expert_0],
+                                                                                          x_test[indices_expert_1],
+                                                                                          x_test[indices_expert_2]],
+                                                                                         [y_test[indices_expert_0],
+                                                                                          y_test[indices_expert_1],
+                                                                                          y_test[indices_expert_2]],
+                                                                                         generators, ch_org,
+                                                                                         [ch_org_0, ch_org_1, ch_org_2],
+                                                                                         NOISE_DIM, device)
             #
             # ws_mean = np.array(ws_values).mean()
             epoch_time = time.time() - start
@@ -461,6 +480,9 @@ for _ in range(N_RUNS):
             # Log to WandB tool
             log_data = {
                 'ws_mean': ws_mean,
+                'ws_mean_0': ws_mean_0,
+                'ws_mean_1': ws_mean_1,
+                'ws_mean_2': ws_mean_2,
                 'gen_loss_0': np.mean(gen_loss_epoch_0),
                 'gen_loss_1': np.mean(gen_loss_epoch_1),
                 'gen_loss_2': np.mean(gen_loss_epoch_2),
