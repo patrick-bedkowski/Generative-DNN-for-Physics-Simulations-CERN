@@ -181,7 +181,7 @@ def calculate_joint_ws_across_experts(n_calc, x_tests: List, y_tests: List, gene
     """
     Calculates the WS distance across the whole distribution.
     """
-    # if legth of data is not the same, raise an error
+    # if length of data is not the same, raise an error
     if len(x_tests) != len(y_tests) or len(x_tests) != len(generators):
         raise ValueError("Length of data is not the same")
 
@@ -189,18 +189,16 @@ def calculate_joint_ws_across_experts(n_calc, x_tests: List, y_tests: List, gene
     ws = np.zeros(5)
     ws_exp = np.zeros((3, 5))  # ws for each expert
     for j in range(n_calc):  # Perform few calculations of the ws distance
-        ch_gen_all = np.zeros(ch_org.shape)
+        ch_gen_all = np.zeros(ch_org.shape)  # for gathering the whole generated distribution of pixels
         ch_gen_expert = []
         for generator_idx in range(len(generators)):
             y_test_temp = torch.tensor(y_tests[generator_idx], device=device)
             num_samples = x_tests[generator_idx].shape[0]
-            num_batches = (num_samples + batch_size - 1) // batch_size  # Calculate number of batches
-            results_all = np.zeros((num_samples, 56, 30))
 
             if num_samples == 0:
                 continue
-            results_all = get_predictions_from_generator_results(num_batches, batch_size, num_samples, noise_dim,
-                                                                 device, y_test_temp, generators[generator_idx], results_all)
+            results_all = get_predictions_from_generator_results(batch_size, num_samples, noise_dim,
+                                                                 device, y_test_temp, generators[generator_idx])
 
             ch_gen_smaller = pd.DataFrame(sum_channels_parallel(results_all)).values
             ch_gen_expert.append(ch_gen_smaller.copy())
@@ -226,8 +224,10 @@ def calculate_joint_ws_across_experts(n_calc, x_tests: List, y_tests: List, gene
     return ws_mean, ws_mean_0, ws_mean_1, ws_mean_2
 
 
-def get_predictions_from_generator_results(num_batches, batch_size, num_samples, noise_dim,
-                                           device, y_test, generator, results_all):
+def get_predictions_from_generator_results(batch_size, num_samples, noise_dim,
+                                           device, y_test, generator):
+    num_batches = (num_samples + batch_size - 1) // batch_size  # Calculate number of batches
+    results_all = np.zeros((num_samples, 56, 30))
     for batch_idx in range(num_batches):
         start_idx = batch_idx * batch_size
         end_idx = min(start_idx + batch_size, num_samples)
@@ -272,6 +272,7 @@ def calculate_ws_ch_proton_model(n_calc, x_test, y_test, generator,
     results_all = np.zeros((num_samples, 56, 30))
 
     for j in range(n_calc):  # Perform few calculations of the ws distance
+        # appends the generated image to the specific indices of the num_batches
         results_all = get_predictions_from_generator_results(num_batches, batch_size, num_samples, noise_dim,
                                                              device, y_test, generator, results_all)
         # now results_all contains all images in batch

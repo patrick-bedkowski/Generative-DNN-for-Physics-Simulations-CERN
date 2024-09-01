@@ -88,17 +88,48 @@ class Discriminator(nn.Module):
         out = self.sigmoid(out)
         return out, latent
 
+# Define the Router Network
+class RouterNetwork(nn.Module):
+    def __init__(self, cond_dim):
+        super(RouterNetwork, self).__init__()
+        self.fc_layers = nn.Sequential(
+            nn.Linear(cond_dim, 128),
+            nn.LeakyReLU(0.1),
+            nn.Linear(128, 64),
+            nn.LeakyReLU(0.1),
+            nn.Linear(64, 32),
+            nn.LeakyReLU(0.1),
+            nn.Linear(32, 3),
+            nn.Softmax(dim=1)
+        )
+
+    def forward(self, cond):
+        return self.fc_layers(cond)
+
+
 # # Define the Router Network
 # class RouterNetwork(nn.Module):
 #     def __init__(self, cond_dim):
 #         super(RouterNetwork, self).__init__()
 #         self.fc_layers = nn.Sequential(
+#             # Hidden Layer 1
 #             nn.Linear(cond_dim, 128),
+#             nn.BatchNorm1d(128),  # Batch normalization
 #             nn.LeakyReLU(0.1),
+#             nn.Dropout(0.5),  # Dropout for regularization
+#
+#             # Hidden Layer 2
 #             nn.Linear(128, 64),
+#             nn.BatchNorm1d(64),  # Batch normalization
 #             nn.LeakyReLU(0.1),
+#             nn.Dropout(0.5),  # Dropout for regularization
+#
+#             # Hidden Layer 3
 #             nn.Linear(64, 32),
+#             nn.BatchNorm1d(32),  # Batch normalization
 #             nn.LeakyReLU(0.1),
+#
+#             # Output Layer
 #             nn.Linear(32, 3),
 #             nn.Softmax(dim=1)
 #         )
@@ -107,35 +138,23 @@ class Discriminator(nn.Module):
 #         return self.fc_layers(cond)
 
 
-# Define the Router Network
-class RouterNetwork(nn.Module):
-    def __init__(self, cond_dim):
-        super(RouterNetwork, self).__init__()
-        self.fc_layers = nn.Sequential(
-            # Hidden Layer 1
-            nn.Linear(cond_dim, 128),
-            nn.BatchNorm1d(128),  # Batch normalization
-            nn.LeakyReLU(0.1),
-            nn.Dropout(0.5),  # Dropout for regularization
-
-            # Hidden Layer 2
-            nn.Linear(128, 64),
-            nn.BatchNorm1d(64),  # Batch normalization
-            nn.LeakyReLU(0.1),
-            nn.Dropout(0.5),  # Dropout for regularization
-
-            # Hidden Layer 3
-            nn.Linear(64, 32),
-            nn.BatchNorm1d(32),  # Batch normalization
-            nn.LeakyReLU(0.1),
-
-            # Output Layer
-            nn.Linear(32, 3),
-            nn.Softmax(dim=1)
-        )
-
-    def forward(self, cond):
-        return self.fc_layers(cond)
+# # Define the Router Network
+# class RouterNetwork(nn.Module):
+#     def __init__(self, cond_dim):
+#         super(RouterNetwork, self).__init__()
+#         self.fc_layers = nn.Sequential(
+#             # Hidden Layer 1
+#             nn.Linear(cond_dim, 32),
+#             nn.LeakyReLU(0.1),
+#             nn.Dropout(0.3),
+#
+#             # Output Layer
+#             nn.Linear(32, 3),
+#             nn.Softmax(dim=1)
+#         )
+#
+#     def forward(self, cond):
+#         return self.fc_layers(cond)
 
 
 class AuxReg(nn.Module):
