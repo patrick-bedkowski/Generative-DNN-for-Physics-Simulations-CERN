@@ -177,7 +177,7 @@ def save_scales(model_name, scaler_means, scaler_scales, filepath):
 #     return ws_mean
 
 def calculate_joint_ws_across_experts(n_calc, x_tests: List, y_tests: List, generators: List,
-                                      ch_org, ch_org_expert, noise_dim, device, batch_size=64):
+                                      ch_org, ch_org_expert, noise_dim, device, batch_size=64, n_experts=3):
     """
     Calculates the WS distance across the whole distribution.
     """
@@ -187,9 +187,9 @@ def calculate_joint_ws_across_experts(n_calc, x_tests: List, y_tests: List, gene
 
     # gather all predictions
     ws = np.zeros(5)
-    ws_exp = np.zeros((3, 5))  # ws for each expert
+    ws_exp = np.zeros((n_experts, 5))  # ws for each expert
     for j in range(n_calc):  # Perform few calculations of the ws distance
-        ch_gen_all = np.zeros(ch_org.shape)  # for gathering the whole generated distribution of pixels
+        ch_gen_all = []  # for gathering the whole generated distribution of pixels
         ch_gen_expert = []
         for generator_idx in range(len(generators)):
             y_test_temp = torch.tensor(y_tests[generator_idx], device=device)
@@ -202,8 +202,8 @@ def calculate_joint_ws_across_experts(n_calc, x_tests: List, y_tests: List, gene
 
             ch_gen_smaller = pd.DataFrame(sum_channels_parallel(results_all)).values
             ch_gen_expert.append(ch_gen_smaller.copy())
-            ch_gen_all = np.concatenate((ch_gen_all, ch_gen_smaller), axis=0)
-
+            ch_gen_all.extend(ch_gen_smaller)
+        ch_gen_all = np.array(ch_gen_all)
         for i in range(5):
             ws[i] = ws[i] + wasserstein_distance(ch_org[:, i], ch_gen_all[:, i])
             # Calculate separate WS distance for expert
@@ -218,10 +218,11 @@ def calculate_joint_ws_across_experts(n_calc, x_tests: List, y_tests: List, gene
     ws_mean_0 = ws_exp[0].mean()
     ws_mean_1 = ws_exp[1].mean()
     ws_mean_2 = ws_exp[2].mean()
+    # ws_mean_3 = ws_exp[3].mean()
     print("ws mean", f'{ws_mean:.2f}', end=" ")
     for n, score in enumerate(ws):
         print("ch" + str(n + 1), f'{score:.2f}', end=" ")
-    return ws_mean, ws_mean_0, ws_mean_1, ws_mean_2
+    return ws_mean, ws_mean_0, ws_mean_1, ws_mean_2#, ws_mean_3
 
 
 def get_predictions_from_generator_results(batch_size, num_samples, noise_dim,
