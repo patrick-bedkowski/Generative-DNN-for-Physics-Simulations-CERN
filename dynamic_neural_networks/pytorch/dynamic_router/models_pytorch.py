@@ -5,6 +5,7 @@ import torch
 # Define the Generator model
 class Generator(nn.Module):
     def __init__(self, noise_dim, cond_dim):
+        self.name = "Generator-1-original-architecture"
         super(Generator, self).__init__()
         self.fc1 = nn.Sequential(
             nn.Linear(noise_dim + cond_dim, 256),  # This should be 19 (10 + 9)
@@ -45,6 +46,48 @@ class Generator(nn.Module):
         x = self.upsample(x)
         x = self.conv_layers(x)
         return x
+
+# class Generator(nn.Module):
+#     def __init__(self, noise_dim, cond_dim):
+#         self.name = "Generator-2-simplified-architecture"
+#         super(Generator, self).__init__()
+#         self.fc1 = nn.Sequential(
+#             nn.Linear(noise_dim + cond_dim, 256),
+#             nn.BatchNorm1d(256),
+#             nn.LeakyReLU(0.1),
+#             nn.Dropout(0.2)
+#         )
+#         self.fc2 = nn.Sequential(
+#             nn.Linear(256, 64 * 14 * 8),
+#             nn.BatchNorm1d(64 * 14 * 8),
+#             nn.LeakyReLU(0.1),
+#             nn.Dropout(0.2)
+#         )
+#         # Upsampling to get the spatial dimension close to target size
+#         self.upsample1 = nn.Upsample(scale_factor=(4, 2))
+#         self.conv_layers = nn.Sequential(
+#             nn.Conv2d(64, 128, kernel_size=(3, 4), padding=1),  # Keep the same kernel size
+#             nn.BatchNorm2d(128),
+#             nn.LeakyReLU(0.1),
+#             nn.Dropout(0.2),
+#             nn.Conv2d(128, 64, kernel_size=(2, 4), padding=1),
+#             nn.BatchNorm2d(64),
+#             nn.LeakyReLU(0.1),
+#             nn.Dropout(0.2),
+#             nn.Upsample(scale_factor=(1, 2)),
+#             nn.Conv2d(64, 1, kernel_size=(2, 3), padding=(0, 2)),
+#             nn.ReLU()
+#         )
+#
+#     def forward(self, noise, cond):
+#         x = torch.cat((noise, cond), dim=1)
+#         x = self.fc1(x)
+#         x = self.fc2(x)
+#         x = x.view(-1, 64, 14, 8)
+#         x = self.upsample1(x)
+#         x = self.conv_layers(x)
+#         return x
+
 
 # Define the Discriminator model
 class Discriminator(nn.Module):
@@ -88,10 +131,12 @@ class Discriminator(nn.Module):
         out = self.sigmoid(out)
         return out, latent
 
+
 # Define the Router Network
 class RouterNetwork(nn.Module):
-    def __init__(self, cond_dim):
+    def __init__(self, cond_dim, num_generators):
         super(RouterNetwork, self).__init__()
+        self.num_generators = num_generators
         self.fc_layers = nn.Sequential(
             nn.Linear(cond_dim, 128),
             nn.LeakyReLU(0.1),
@@ -99,7 +144,7 @@ class RouterNetwork(nn.Module):
             nn.LeakyReLU(0.1),
             nn.Linear(64, 32),
             nn.LeakyReLU(0.1),
-            nn.Linear(32, 3),
+            nn.Linear(32, self.num_generators),
             nn.Softmax(dim=1)
         )
 

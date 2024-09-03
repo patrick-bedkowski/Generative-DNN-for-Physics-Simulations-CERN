@@ -248,17 +248,18 @@ def get_predictions_from_generator_results(batch_size, num_samples, noise_dim,
 
 # Define the loss function
 def regressor_loss(real_coords, fake_coords, scaler_poz, AUX_STRENGTH):
-    # Move fake_coords to CPU and convert to NumPy array
-    fake_coords_cpu = fake_coords.cpu().detach().numpy()
+    # Ensure real_coords and fake_coords are on the same device
+    real_coords = real_coords.to(fake_coords.device)
 
-    # Transform using the scaler
-    fake_coords_scaled = scaler_poz.transform(fake_coords_cpu)
+    # Use in-place scaling if the scaler provides the scale and mean attributes
+    scale = torch.tensor(scaler_poz.scale_, device=fake_coords.device, dtype=torch.float32)
+    mean = torch.tensor(scaler_poz.mean_, device=fake_coords.device, dtype=torch.float32)
 
-    # Convert back to tensor and move to the appropriate device
-    fake_coords_scaled = torch.tensor(fake_coords_scaled).to(real_coords.device)
+    # Scale fake_coords directly using PyTorch operations
+    fake_coords_scaled = (fake_coords - mean) / scale
 
     # Compute the MAE loss
-    return F.l1_loss(fake_coords_scaled, real_coords) * AUX_STRENGTH
+    return F.mse_loss(fake_coords_scaled, real_coords) * AUX_STRENGTH
 
 
 def calculate_ws_ch_proton_model(n_calc, x_test, y_test, generator,
@@ -269,13 +270,11 @@ def calculate_ws_ch_proton_model(n_calc, x_test, y_test, generator,
     y_test = torch.tensor(y_test, device=device)
 
     num_samples = x_test.shape[0]
-    num_batches = (num_samples + batch_size - 1) // batch_size  # Calculate number of batches
-    results_all = np.zeros((num_samples, 56, 30))
 
     for j in range(n_calc):  # Perform few calculations of the ws distance
         # appends the generated image to the specific indices of the num_batches
-        results_all = get_predictions_from_generator_results(num_batches, batch_size, num_samples, noise_dim,
-                                                             device, y_test, generator, results_all)
+        results_all = get_predictions_from_generator_results(batch_size, num_samples, noise_dim,
+                                                             device, y_test, generator)
         # now results_all contains all images in batch
         try:
             ch_gen = pd.DataFrame(sum_channels_parallel(results_all)).values
@@ -285,7 +284,6 @@ def calculate_ws_ch_proton_model(n_calc, x_test, y_test, generator,
         except ValueError as e:
             print('Error occurred while generating')
             print(e)
-
     ws = ws / n_calc  # Average over the number of calculations
     ws_mean = ws.mean()
     print("ws mean", f'{ws_mean:.2f}', end=" ")
