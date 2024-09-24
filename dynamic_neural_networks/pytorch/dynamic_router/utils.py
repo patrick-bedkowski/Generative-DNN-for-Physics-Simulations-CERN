@@ -191,7 +191,7 @@ def calculate_joint_ws_across_experts(n_calc, x_tests: List, y_tests: List, gene
     for j in range(n_calc):  # Perform few calculations of the ws distance
         ch_gen_all = []  # for gathering the whole generated distribution of pixels
         ch_gen_expert = []
-        for generator_idx in range(len(generators)):
+        for generator_idx in range(len(generators)):  # for all generators
             y_test_temp = torch.tensor(y_tests[generator_idx], device=device)
             num_samples = x_tests[generator_idx].shape[0]
 
@@ -199,13 +199,14 @@ def calculate_joint_ws_across_experts(n_calc, x_tests: List, y_tests: List, gene
                 continue
             results_all = get_predictions_from_generator_results(batch_size, num_samples, noise_dim,
                                                                  device, y_test_temp, generators[generator_idx])
-
+            print(f"for generator {generator_idx}. Samples generated: {results_all.shape}, real_samples: {num_samples}")
             ch_gen_smaller = pd.DataFrame(sum_channels_parallel(results_all)).values
             ch_gen_expert.append(ch_gen_smaller.copy())
-            ch_gen_all.extend(ch_gen_smaller)
-        ch_gen_all = np.array(ch_gen_all)
+            ch_gen_all.extend(ch_gen_smaller.copy())
+        ch_gen_all = np.array(ch_gen_all)  # all generated predictions
+        print("shape of all generated:", ch_gen_all.shape)
         for i in range(5):
-            ws[i] = ws[i] + wasserstein_distance(ch_org[:, i], ch_gen_all[:, i])
+            ws[i] = ws[i] + wasserstein_distance(ch_org[:, i], ch_gen_all[:, i])  # for all generations
             # Calculate separate WS distance for expert
             for exp_idx in range(len(generators)):
                 ws_exp[exp_idx][i] += wasserstein_distance(ch_org_expert[exp_idx][:, i], ch_gen_expert[exp_idx][:, i])
@@ -215,14 +216,14 @@ def calculate_joint_ws_across_experts(n_calc, x_tests: List, y_tests: List, gene
     ws = ws / n_calc  # average per calculation
     ws_exp = ws_exp / n_calc  # average per calculation
     ws_mean = ws.mean()
+    print("WS shape of expert 0",  ws_exp[0].shape)
     ws_mean_0 = ws_exp[0].mean()
     ws_mean_1 = ws_exp[1].mean()
     ws_mean_2 = ws_exp[2].mean()
-    # ws_mean_3 = ws_exp[3].mean()
     print("ws mean", f'{ws_mean:.2f}', end=" ")
     for n, score in enumerate(ws):
         print("ch" + str(n + 1), f'{score:.2f}', end=" ")
-    return ws_mean, ws_mean_0, ws_mean_1, ws_mean_2#, ws_mean_3
+    return ws_mean, ws_mean_0, ws_mean_1, ws_mean_2
 
 
 def get_predictions_from_generator_results(batch_size, num_samples, noise_dim,
@@ -249,17 +250,17 @@ def get_predictions_from_generator_results(batch_size, num_samples, noise_dim,
 # Define the loss function
 def regressor_loss(real_coords, fake_coords, scaler_poz, AUX_STRENGTH):
     # Ensure real_coords and fake_coords are on the same device
-    real_coords = real_coords.to(fake_coords.device)
+    # real_coords = real_coords.to(fake_coords.device)
 
     # Use in-place scaling if the scaler provides the scale and mean attributes
-    scale = torch.tensor(scaler_poz.scale_, device=fake_coords.device, dtype=torch.float32)
-    mean = torch.tensor(scaler_poz.mean_, device=fake_coords.device, dtype=torch.float32)
-
-    # Scale fake_coords directly using PyTorch operations
-    fake_coords_scaled = (fake_coords - mean) / scale
+    # scale = torch.tensor(scaler_poz.scale_, device=fake_coords.device, dtype=torch.float32)
+    # mean = torch.tensor(scaler_poz.mean_, device=fake_coords.device, dtype=torch.float32)
+    #
+    # # Scale fake_coords directly using PyTorch operations
+    # fake_coords_scaled = (fake_coords - mean) / scale
 
     # Compute the MAE loss
-    return F.mse_loss(fake_coords_scaled, real_coords) * AUX_STRENGTH
+    return F.mse_loss(fake_coords, real_coords) * AUX_STRENGTH
 
 
 def calculate_ws_ch_proton_model(n_calc, x_test, y_test, generator,
@@ -359,16 +360,18 @@ def intensity_regularization(gen_im_proton, intensity_proton, scaler_intensity, 
     # print(sum_all_axes_p_rescaled)
     # print(mean_intensity_scaled)
 
-    # Manually scale using the parameters from the fitted MinMaxScaler
-    data_min = torch.tensor(scaler_intensity.data_min_, device=gen_im_proton.device, dtype=torch.float32)
-    data_max = torch.tensor(scaler_intensity.data_max_, device=gen_im_proton.device, dtype=torch.float32)
+    # DELETED THE SCALING
 
-    sum_all_axes_p_scaled = (sum_all_axes_p - data_min) / (data_max - data_min)
+    # Manually scale using the parameters from the fitted MinMaxScaler
+    # data_min = torch.tensor(scaler_intensity.data_min_, device=gen_im_proton.device, dtype=torch.float32)
+    # data_max = torch.tensor(scaler_intensity.data_max_, device=gen_im_proton.device, dtype=torch.float32)
+    #
+    # sum_all_axes_p_scaled = (sum_all_axes_p - data_min) / (data_max - data_min)
     # Ensure intensity_proton is correctly shaped and on the same device
     intensity_proton = intensity_proton.view(-1, 1).to(gen_im_proton.device)  # Ensure it is of shape [batch_size, 1]
 
     # Calculate MAE loss
-    mae_value_p = F.l1_loss(sum_all_axes_p_scaled, intensity_proton)
+    mae_value_p = F.l1_loss(sum_all_axes_p, intensity_proton)
     return IN_STRENGTH * mae_value_p, sum_all_axes_p, std_intensity_scaled.detach(), mean_intensity_scaled.detach()
 
 

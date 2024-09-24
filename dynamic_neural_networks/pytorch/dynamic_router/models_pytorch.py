@@ -10,32 +10,32 @@ class Generator(nn.Module):
         self.fc1 = nn.Sequential(
             nn.Linear(noise_dim + cond_dim, 256),  # This should be 19 (10 + 9)
             nn.BatchNorm1d(256),
-            nn.LeakyReLU(0.1),
-            nn.Dropout(0.2)
+            nn.Dropout(0.2),
+            nn.LeakyReLU(0.1, inplace=True)
         )
         self.fc2 = nn.Sequential(
             nn.Linear(256, 128 * 20 * 10),
             nn.BatchNorm1d(128 * 20 * 10),
-            nn.LeakyReLU(0.1),
-            nn.Dropout(0.2)
+            nn.Dropout(0.2),
+            nn.LeakyReLU(0.1, inplace=True)
         )
         self.upsample = nn.Upsample(scale_factor=(3, 2))
         self.conv_layers = nn.Sequential(
             nn.Conv2d(128, 256, kernel_size=(2, 2)),
             nn.BatchNorm2d(256),
-            nn.LeakyReLU(0.1),
             nn.Dropout(0.2),
+            nn.LeakyReLU(0.1, inplace=True),
             nn.Upsample(scale_factor=(1, 2)),
             nn.Conv2d(256, 128, kernel_size=(2, 2)),
             nn.BatchNorm2d(128),
-            nn.LeakyReLU(0.1),
             nn.Dropout(0.2),
+            nn.LeakyReLU(0.1, inplace=True),
             nn.Conv2d(128, 64, kernel_size=(2, 2)),
             nn.BatchNorm2d(64),
-            nn.LeakyReLU(0.1),
             nn.Dropout(0.2),
+            nn.LeakyReLU(0.1, inplace=True),
             nn.Conv2d(64, 1, kernel_size=(2, 7)),
-            nn.ReLU()
+            nn.ReLU(inplace=True)
         )
 
     def forward(self, noise, cond):
@@ -97,25 +97,25 @@ class Discriminator(nn.Module):
         self.conv_layers = nn.Sequential(
             nn.Conv2d(1, 32, kernel_size=(3, 3)),
             nn.BatchNorm2d(32),
-            nn.LeakyReLU(0.1),
+            nn.LeakyReLU(0.1, inplace=True),
             nn.Dropout(0.2),
             nn.MaxPool2d(kernel_size=(2, 2)),
             nn.Conv2d(32, 16, kernel_size=(3, 3)),
             nn.BatchNorm2d(16),
-            nn.LeakyReLU(0.1),
+            nn.LeakyReLU(0.1, inplace=True),
             nn.Dropout(0.2),
             nn.MaxPool2d(kernel_size=(2, 1))
         )
         self.fc1 = nn.Sequential(
             nn.Linear(16 * 12 * 12 + cond_dim, 128),
             nn.BatchNorm1d(128),
-            nn.LeakyReLU(0.1),
+            nn.LeakyReLU(0.1, inplace=True),
             nn.Dropout(0.2)
         )
         self.fc2 = nn.Sequential(
             nn.Linear(128, 64),
             nn.BatchNorm1d(64),
-            nn.LeakyReLU(0.1),
+            nn.LeakyReLU(0.1, inplace=True),
             nn.Dropout(0.2)
         )
         self.fc3 = nn.Linear(64, self.num_generators)
@@ -209,32 +209,32 @@ class AuxReg(nn.Module):
         self.conv3 = nn.Conv2d(1, 32, kernel_size=3)
         self.conv3_bd = nn.Sequential(
             nn.BatchNorm2d(32),
-            nn.Dropout(0.2),
-            nn.LeakyReLU(0.1)
+            nn.LeakyReLU(0.1),
+            nn.Dropout(0.2)
         )
         self.pool3 = nn.MaxPool2d(kernel_size=(2, 2))
 
         self.conv4 = nn.Conv2d(32, 64, kernel_size=3)
         self.conv4_bd = nn.Sequential(
             nn.BatchNorm2d(64),
-            nn.Dropout(0.2),
-            nn.LeakyReLU(0.1)
+            nn.LeakyReLU(0.1),
+            nn.Dropout(0.2)
         )
         self.pool4 = nn.MaxPool2d(kernel_size=(2, 1))
 
         self.conv5 = nn.Conv2d(64, 128, kernel_size=3)
         self.conv5_bd = nn.Sequential(
             nn.BatchNorm2d(128),
-            nn.Dropout(0.2),
-            nn.LeakyReLU(0.1)
+            nn.LeakyReLU(0.1),
+            nn.Dropout(0.2)
         )
         self.pool5 = nn.MaxPool2d(kernel_size=(2, 1))
 
         self.conv6 = nn.Conv2d(128, 256, kernel_size=3)
         self.conv6_bd = nn.Sequential(
             nn.BatchNorm2d(256),
-            nn.Dropout(0.2),
-            nn.LeakyReLU(0.1)
+            nn.LeakyReLU(0.1),
+            nn.Dropout(0.2)
         )
 
         self.flatten = nn.Flatten()

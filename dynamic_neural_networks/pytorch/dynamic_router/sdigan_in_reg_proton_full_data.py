@@ -44,23 +44,22 @@ EPOCHS = 250
 LR_G = 1e-4
 LR_D = 1e-5
 LR_A = 1e-4
-# NAME = f"SDI-GAN-REG-PROTON-18-{DI_STRENGTH}-{IN_STRENGTH}-{AUX_STRENGTH}"
-NAME = f"SDI-GAN-REG-PROTON-18-{DI_STRENGTH}-{IN_STRENGTH}-{AUX_STRENGTH}"
+NAME = f"SDI-GAN-REG-PROTON-full-{DI_STRENGTH}-{IN_STRENGTH}-{AUX_STRENGTH}"
 
 
 for _ in range(N_RUNS):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    data = pd.read_pickle('/net/tscratch/people/plgpbedkowski/data/small_intervals/data_photonsum_proton_18_493_neutron_0_3145.pkl')
-    print('Loaded: ', data.shape, "max:", data.max())
-    data_cond = pd.read_pickle('/net/tscratch/people/plgpbedkowski/data/small_intervals/data_cond_photonsum_proton_18_493_neutron_0_3145.pkl')
-    print('Loaded cond: ', data_cond.shape, "max:", data_cond.values.max(), "min:", data_cond.values.min())
+    data = pd.read_pickle('/net/tscratch/people/plgpbedkowski/data/data_proton_photonsum_proton_1_2312.pkl')
+    data_cond = pd.read_pickle('/net/tscratch/people/plgpbedkowski/data/data_cond_photonsum_proton_1_2312.pkl')
     photon_sum_proton_min, photon_sum_proton_max = data_cond.proton_photon_sum.min(), data_cond.proton_photon_sum.max()
-    # data of coordinates of maximum value of pixel on the images
-    data_posi = pd.read_pickle('/net/tscratch/people/plgpbedkowski/data/small_intervals/data_coord_photonsum_proton_18_493_neutron_0_3145.pkl')
-    print('Loaded posi: ', data_posi.shape, "max:", data_posi.values.max(), "min:", data_posi.values.min())
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    photon_sum_proton_min, photon_sum_proton_max = data_cond.proton_photon_sum.min(), data_cond.proton_photon_sum.max()
+    # data of coordinates of maximum value of pixel on the images
+    data_posi = pd.read_pickle('/net/tscratch/people/plgpbedkowski/data/data_coord_proton_photonsum_proton_1_2312.pkl')
+    print('Loaded positions: ', data_posi.shape, "max:", data_posi.values.max(), "min:", data_posi.values.min())
+
+    DATE_STR = datetime.now().strftime("%d_%m_%Y_%H_%M")
+    wandb_run_name = f"{NAME}_{LR_G}_{LR_D}_{DATE_STR}"
+    EXPERIMENT_DIR_NAME = f"experiments/{wandb_run_name}_{int(photon_sum_proton_min)}_{int(photon_sum_proton_max)}_{DATE_STR}"
 
     print("Photon sum proton min:", photon_sum_proton_min, "max:", photon_sum_proton_max)
 
@@ -92,7 +91,7 @@ for _ in range(N_RUNS):
 
     # Diversity regularization
     scaler = MinMaxScaler()
-    std = data_cond["std"].values.reshape(-1, 1)
+    std = data_cond["std_proton"].values.reshape(-1, 1)
     std = np.float32(std)
     std = scaler.fit_transform(std)
     print("std max", std.max(), "min", std.min())
@@ -111,8 +110,9 @@ for _ in range(N_RUNS):
     print('Load positions:', data_xy.shape, "cond max", data_xy.max(), "min", data_xy.min())
 
     scaler_cond = StandardScaler()
-    data_cond = scaler_cond.fit_transform(data_cond.drop(columns=['proton_photon_sum', 'std', 'group_number'])).astype(
-        np.float32)
+    data_cond = scaler_cond.fit_transform(data_cond.drop(columns=["std_proton", "proton_photon_sum",
+                                                                  'group_number_proton',
+                                                                  'expert_number'])).astype(np.float32)
 
     print("Data_cond shape", data_cond.shape)
 
