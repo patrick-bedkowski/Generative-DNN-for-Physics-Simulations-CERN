@@ -178,7 +178,9 @@ for _ in range(N_RUNS):
     # Define experts
     generators = []
     for generator_idx in range(N_EXPERTS):
-        generators.append(Generator(NOISE_DIM, N_COND).to(device))
+        generator = Generator(NOISE_DIM, N_COND, DI_STRENGTH, IN_STRENGTH).to(device)
+        generators.append(generator)
+
     generator_optimizers = [optim.Adam(gen.parameters(), lr=LR_G) for gen in generators]
 
     # Define discriminators
