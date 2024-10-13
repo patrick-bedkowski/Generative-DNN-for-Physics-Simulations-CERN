@@ -6,8 +6,7 @@ import torch
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
 from typing import List
-
-import tqdm
+from sklearn.model_selection import StratifiedKFold
 
 
 def get_channel_masks(input_array: np.ndarray):
@@ -378,7 +377,7 @@ def intensity_regularization(gen_im_proton, intensity_proton, scaler_intensity, 
 def generate_and_save_images(model, epoch, noise, noise_cond, x_test,
                              photon_sum_proton_min, photon_sum_proton_max,
                              device, random_generator):
-    SUPTITLE_TXT = f"\nModel: SDI-GAN proton data from generator {random_generator}" \
+    SUPTITLE_TXT = f"\nModel: SDI-GAN proton data from {random_generator}" \
                    f"\nPhotonsum interval: [{photon_sum_proton_min}, {photon_sum_proton_max}]" \
                    f"\nEPOCH: {epoch}"
 
@@ -392,16 +391,15 @@ def generate_and_save_images(model, epoch, noise, noise_cond, x_test,
     with torch.no_grad():
         noise = noise.to(device)
         noise_cond = noise_cond.to(device)
-        predictions = model(noise, noise_cond).cpu().numpy()  # Move to CPU for numpy operations
+        predictions = model(noise, noise_cond).cpu().numpy().reshape(-1, 56, 30)  # Move to CPU for numpy operations
 
     fig, axs = plt.subplots(2, 6, figsize=(15, 5))
     fig.suptitle(SUPTITLE_TXT, x=0.1, horizontalalignment='left')
-
     for i in range(0, 12):
-        if i < 7:
-            x = x_test[20 + i].reshape(56, 30)
+        if i < 6:
+            x = x_test[i].reshape(56, 30)
         else:
-            x = predictions[i - 6].reshape(56, 30)
+            x = predictions[i - 6]
         im = axs[i // 6, i % 6].imshow(x, cmap='gnuplot')
         axs[i // 6, i % 6].axis('off')
         fig.colorbar(im, ax=axs[i // 6, i % 6])
@@ -462,9 +460,35 @@ def calculate_expert_utilization_entropy(gating_probs, ENT_STRENGTH=0.1):
     Returns:
     torch.Tensor: The entropy of the average gating probabilities.
     """
-    avg_gating_probs = torch.mean(gating_probs, dim=0)  # Average over samples
+    avg_gating_probs = torch.mean(gating_probs, dim=0)  # Average over samples. The sum of that is  equal roughly to 1
     entropy = calculate_entropy(avg_gating_probs)
     return entropy * ENT_STRENGTH
+
+
+class StratifiedBatchSampler:
+    """Stratified batch sampling
+    Provides equal representation of target classes in each batch.
+    Credits to rfeinman from forum:
+    - https://discuss.pytorch.org/t/how-to-enable-the-dataloader-to-sample-from-each-class-with-equal-probability/911/6
+    """
+    def __init__(self, y, batch_size, shuffle=True):
+        if torch.is_tensor(y):
+            y = y.numpy()
+        assert len(y.shape) == 1, 'label array must be 1D'
+        n_batches = int(len(y) / batch_size)
+        self.skf = StratifiedKFold(n_splits=n_batches, shuffle=shuffle)
+        self.X = torch.randn(len(y),1).numpy()
+        self.y = y
+        self.shuffle = shuffle
+
+    def __iter__(self):
+        if self.shuffle:
+            self.skf.random_state = torch.randint(0,int(1e8),size=()).item()
+        for train_idx, test_idx in self.skf.split(self.X, self.y):
+            yield test_idx
+
+    def __len__(self):
+        return len(self.y)
 
 
 
