@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 from typing import List
 from sklearn.model_selection import StratifiedKFold
 
-from utils import get_predictions_from_generator_results
+from utils import get_predictions_from_generator_results, calculate_ws_ch_proton_model, sum_channels_parallel
 
 
 def get_mean_std_from_expert_genrations(noise_cond, expert, device, batch_size=64, noise_dim=10):
@@ -65,9 +65,9 @@ def plot_proton_photonsum_histogreams_shared(data_0, data_1, data_2, save_path=N
     """
     fig, ax = plt.subplots(figsize=(8, 6))  # Adjust figsize as needed
 
-    ax.hist(data_0, bins=30, color='blue', alpha=0.5, label='Expert 0')
-    ax.hist(data_1, bins=30, color='green', alpha=0.5, label='Expert 1')
-    ax.hist(data_2, bins=30, color='red', alpha=0.5, label='Expert 2')
+    ax.hist(data_0, bins=30, color='blue', alpha=0.3, label='Expert 0')
+    ax.hist(data_1, bins=30, color='green', alpha=0.3, label='Expert 1')
+    ax.hist(data_2, bins=30, color='red', alpha=0.3, label='Expert 2')
 
     ax.set_xscale('log')
     ax.set_yscale('log')
@@ -84,3 +84,32 @@ def plot_proton_photonsum_histogreams_shared(data_0, data_1, data_2, save_path=N
 
     return fig
 
+
+def make_histograms(noise_cond, expert, ch_org, device, noise_dim=9, batch_size=64):
+
+    num_samples = noise_cond.shape[0]
+    results_all = get_predictions_from_generator_results(batch_size, num_samples, noise_dim,
+                                                         device, noise_cond, expert)
+
+
+    ch_gen = np.array(results_all).reshape(-1, 56, 44)
+    ch_gen = pd.DataFrame(sum_channels_parallel(ch_gen)).values
+    original = ch_org
+    expert_gen = ch_gen
+
+    fig, axis = plt.subplots(5, 1, figsize=(10, 14), sharex=False, sharey=False)
+    fig.suptitle("TEST", x=0.1, horizontalalignment='left')
+
+    for i in range(5):
+        bins = np.linspace(0, 1500, 250)
+        axis[i].set_title("Kanał " + str(i + 1))
+        axis[i].hist(original[:, i], bins, alpha=0.5, label='true', color="red")
+        axis[i].hist(expert_gen[:, i], bins, alpha=0.5, label='generated', color="blue")
+        axis[i].legend(loc='upper right')
+        axis[i].set_ylabel('Liczba przykładów')
+        axis[i].set_xlabel('Wartość kanału')
+        axis[i].set_yscale('log')
+
+    fig.tight_layout(rect=[0, 0, 1, 0.975])
+    # fig.savefig("hist_orig.png")
+    plt.show()

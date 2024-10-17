@@ -195,6 +195,7 @@ def calculate_joint_ws_across_experts(n_calc, x_tests: List, y_tests: List, gene
             num_samples = x_tests[generator_idx].shape[0]
 
             if num_samples == 0:
+                ch_gen_expert.append(np.array([]))
                 continue
             results_all = get_predictions_from_generator_results(batch_size, num_samples, noise_dim,
                                                                  device, y_test_temp, generators[generator_idx])
@@ -208,6 +209,8 @@ def calculate_joint_ws_across_experts(n_calc, x_tests: List, y_tests: List, gene
             ws[i] = ws[i] + wasserstein_distance(ch_org[:, i], ch_gen_all[:, i])  # for all generations
             # Calculate separate WS distance for expert
             for exp_idx in range(len(generators)):
+                if ch_gen_expert[exp_idx].shape[0] == 0 or ch_org_expert[exp_idx].shape[0] == 0:
+                    continue
                 ws_exp[exp_idx][i] += wasserstein_distance(ch_org_expert[exp_idx][:, i], ch_gen_expert[exp_idx][:, i])
 
         ws = np.array(ws)  # across 5 runs
@@ -215,6 +218,7 @@ def calculate_joint_ws_across_experts(n_calc, x_tests: List, y_tests: List, gene
     ws = ws / n_calc  # average per calculation
     ws_exp = ws_exp / n_calc  # average per calculation
     ws_mean = ws.mean()
+    ws_std = ws.std()
     print("WS shape of expert 0",  ws_exp[0].shape)
     ws_mean_0 = ws_exp[0].mean()
     ws_mean_1 = ws_exp[1].mean()
@@ -222,7 +226,7 @@ def calculate_joint_ws_across_experts(n_calc, x_tests: List, y_tests: List, gene
     print("ws mean", f'{ws_mean:.2f}', end=" ")
     for n, score in enumerate(ws):
         print("ch" + str(n + 1), f'{score:.2f}', end=" ")
-    return ws_mean, ws_mean_0, ws_mean_1, ws_mean_2
+    return ws_mean, ws_std, ws_mean_0, ws_mean_1, ws_mean_2
 
 
 def get_predictions_from_generator_results(batch_size, num_samples, noise_dim,
@@ -242,7 +246,51 @@ def get_predictions_from_generator_results(batch_size, num_samples, noise_dim,
             results = generator(noise, noise_cond).cpu().numpy()
 
         results = np.exp(results) - 1
+        # results = results*0.75
         results_all[start_idx:end_idx] = results.reshape(-1, 56, 30)
+    return results_all
+
+
+def get_predictions_from_experts_results(num_samples, noise_dim,
+                                         device, y_test, router_network, experts):
+    y_test_tensor = torch.tensor(y_test, device=device)
+    results_all = np.zeros((num_samples, 56, 30))
+
+    with torch.no_grad():
+        router_network.eval()
+        predicted_expert_one_hot = router_network(y_test_tensor).cpu().numpy()
+        predicted_expert = np.argmax(predicted_expert_one_hot, axis=1)
+
+    indx_0 = np.where(predicted_expert == 0)[0].tolist()
+    indx_1 = np.where(predicted_expert == 1)[0].tolist()
+    indx_2 = np.where(predicted_expert == 2)[0].tolist()
+    # print(indx_0, indx_1, indx_2)
+    data_cond_0 = y_test_tensor[indx_0]
+    data_cond_1 = y_test_tensor[indx_1]
+    data_cond_2 = y_test_tensor[indx_2]
+
+    noise_0 = torch.randn(len(data_cond_0), noise_dim, device=device)
+    with torch.no_grad():
+        experts[0].eval()
+        results_0 = experts[0](noise_0, data_cond_0).cpu().numpy()
+
+    noise_1 = torch.randn(len(data_cond_1), noise_dim, device=device)
+    with torch.no_grad():
+        experts[1].eval()
+        results_1 = experts[1](noise_1, data_cond_1).cpu().numpy()
+
+    noise_2 = torch.randn(len(data_cond_2), noise_dim, device=device)
+    with torch.no_grad():
+        experts[2].eval()
+        results_2 = experts[2](noise_2, data_cond_2).cpu().numpy()
+
+    results_0 = np.exp(results_0) - 40
+    results_1 = np.exp(results_1) - 40
+    results_2 = np.exp(results_2) - 40
+
+    results_all[indx_0] = results_0.reshape(-1, 56, 30)
+    results_all[indx_1] = results_1.reshape(-1, 56, 30)
+    results_all[indx_2] = results_2.reshape(-1, 56, 30)
     return results_all
 
 
@@ -377,6 +425,8 @@ def intensity_regularization(gen_im_proton, intensity_proton, scaler_intensity, 
 def generate_and_save_images(model, epoch, noise, noise_cond, x_test,
                              photon_sum_proton_min, photon_sum_proton_max,
                              device, random_generator):
+    if noise_cond is None:
+        return None
     SUPTITLE_TXT = f"\nModel: SDI-GAN proton data from {random_generator}" \
                    f"\nPhotonsum interval: [{photon_sum_proton_min}, {photon_sum_proton_max}]" \
                    f"\nEPOCH: {epoch}"
