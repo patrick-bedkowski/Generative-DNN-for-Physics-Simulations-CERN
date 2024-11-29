@@ -73,11 +73,6 @@ def sum_channels_parallel(data: np.ndarray):
 
 
 def get_max_value_image_coordinates(img):
-    """
-
-    :param img: Input image of any shape
-    :return: Tuple with (X, Y) coordinates
-    """
     return np.unravel_index(np.argmax(img), img.shape)
 
 
@@ -101,82 +96,9 @@ def save_scales(model_name, scaler_means, scaler_scales, filepath):
         f.write(res)
 
 
-# def calculate_ws_ch_proton_model(n_calc, x_test, y_test, generator,
-#                                  ch_org, noise_dim, device, batch_size=64):
-#     ws = np.zeros(5)
-#
-#     # Ensure y_test is a PyTorch tensor
-#     y_test = torch.tensor(y_test, device=device)
-#
-#     num_samples = x_test.shape[0]
-#     num_batches = (num_samples + batch_size - 1) // batch_size  # Calculate number of batches
-#
-#     for j in range(n_calc):  # Perform few calculations of the ws distance
-#         batch_ws = np.zeros(5)
-#
-#         for batch_idx in range(num_batches):
-#             start_idx = batch_idx * batch_size
-#             end_idx = min(start_idx + batch_size, num_samples)
-#
-#             noise = torch.randn(end_idx - start_idx, noise_dim, device=device)
-#             noise_cond = y_test[start_idx:end_idx]
-#
-#             # Generate results using the generator
-#             with torch.no_grad():
-#                 results = generator(noise, noise_cond).cpu().numpy()
-#
-#             results = np.exp(results) - 1
-#
-#             try:
-#                 ch_gen = np.array(results).reshape(-1, 56, 30)
-#                 ch_gen = pd.DataFrame(sum_channels_parallel(ch_gen)).values
-#                 for i in range(5):
-#                     if len(ch_org[start_idx:end_idx, i]) > 0 and len(ch_gen[:, i]) > 0:
-#                         batch_ws[i] += wasserstein_distance(ch_org[start_idx:end_idx, i], ch_gen[:, i])
-#             except ValueError as e:
-#                 print('Error occurred while generating')
-#                 print(e)
-#
-#         ws += batch_ws / num_batches  # Average the batch WS distances
-#
-#     ws = ws / n_calc  # Average over the number of calculations
-#     ws_mean = ws.mean()
-#     print("ws mean", f'{ws_mean:.2f}', end=" ")
-#     for n, score in enumerate(ws):
-#         print("ch" + str(n + 1), f'{score:.2f}', end=" ")
-#     return ws_mean
-
-
-# def calculate_ws_ch_proton_model(n_calc, x_test, y_test, generator,
-#                                  ch_org, noise_dim, device):
-#     num_samples = x_test.shape[0]
-#     ws = np.zeros(5)
-#     for j in range(n_calc):  # Perform few calculations of the ws distance
-#         noise = torch.randn(num_samples, noise_dim, device=device)
-#         noise_cond = torch.tensor(y_test, device=device)
-#
-#         # Generate results using the generator
-#         with torch.no_grad():
-#             results = generator(noise, noise_cond).detatch().numpy()
-#         results = np.exp(results) - 1
-#         try:
-#             ch_gen = np.array(results).reshape(-1, 56, 30)
-#             ch_gen = pd.DataFrame(sum_channels_parallel(ch_gen)).values
-#             for i in range(5):
-#                 ws[i] += wasserstein_distance(ch_org[:, i], ch_gen[:, i])
-#         except ValueError as e:
-#             print('Error occurred while generating')
-#             print(e)
-#
-#     ws = ws / n_calc  # Average over the number of calculations
-#     ws_mean = ws.mean()
-#     print("ws mean", f'{ws_mean:.2f}', end=" ")
-#     for n, score in enumerate(ws):
-#         print("ch" + str(n + 1), f'{score:.2f}', end=" ")
-#     return ws_mean
-
 def calculate_joint_ws_across_experts(n_calc, x_tests: List, y_tests: List, generators: List,
-                                      ch_org, ch_org_expert, noise_dim, device, batch_size=64, n_experts=3):
+                                      ch_org, ch_org_expert, noise_dim, device, batch_size=64, n_experts=3,
+                                      shape_images=(56, 30)):
     """
     Calculates the WS distance across the whole distribution.
     """
@@ -198,7 +120,8 @@ def calculate_joint_ws_across_experts(n_calc, x_tests: List, y_tests: List, gene
                 ch_gen_expert.append(np.array([]))
                 continue
             results_all = get_predictions_from_generator_results(batch_size, num_samples, noise_dim,
-                                                                 device, y_test_temp, generators[generator_idx])
+                                                                 device, y_test_temp, generators[generator_idx],
+                                                                 shape_images=shape_images)
             print(f"for generator {generator_idx}. Samples generated: {results_all.shape}, real_samples: {num_samples}")
             ch_gen_smaller = pd.DataFrame(sum_channels_parallel(results_all)).values
             ch_gen_expert.append(ch_gen_smaller.copy())
@@ -219,20 +142,24 @@ def calculate_joint_ws_across_experts(n_calc, x_tests: List, y_tests: List, gene
     ws_exp = ws_exp / n_calc  # average per calculation
     ws_mean = ws.mean()
     ws_std = ws.std()
-    print("WS shape of expert 0",  ws_exp[0].shape)
-    ws_mean_0 = ws_exp[0].mean()
-    ws_mean_1 = ws_exp[1].mean()
-    ws_mean_2 = ws_exp[2].mean()
+
+    ws_mean_exp = [ws.mean() for ws in ws_exp]
     print("ws mean", f'{ws_mean:.2f}', end=" ")
     for n, score in enumerate(ws):
         print("ch" + str(n + 1), f'{score:.2f}', end=" ")
-    return ws_mean, ws_std, ws_mean_0, ws_mean_1, ws_mean_2
+    if n_experts == 4:
+        return ws_mean, ws_std, ws_mean_exp[0], ws_mean_exp[1], ws_mean_exp[2], ws_mean_exp[3]
+    elif n_experts == 3:
+        return ws_mean, ws_std, ws_mean_exp[0], ws_mean_exp[1], ws_mean_exp[2]
+    elif n_experts == 2:
+        return ws_mean, ws_std, ws_mean_exp[0], ws_mean_exp[1]
+
 
 
 def get_predictions_from_generator_results(batch_size, num_samples, noise_dim,
-                                           device, y_test, generator):
+                                           device, y_test, generator, shape_images=(56, 30)):
     num_batches = (num_samples + batch_size - 1) // batch_size  # Calculate number of batches
-    results_all = np.zeros((num_samples, 56, 30))
+    results_all = np.zeros((num_samples, *shape_images))
     for batch_idx in range(num_batches):
         start_idx = batch_idx * batch_size
         end_idx = min(start_idx + batch_size, num_samples)
@@ -247,7 +174,7 @@ def get_predictions_from_generator_results(batch_size, num_samples, noise_dim,
 
         results = np.exp(results) - 1
         # results = results*0.75
-        results_all[start_idx:end_idx] = results.reshape(-1, 56, 30)
+        results_all[start_idx:end_idx] = results.reshape(-1, *shape_images)
     return results_all
 
 
@@ -264,7 +191,6 @@ def get_predictions_from_experts_results(num_samples, noise_dim,
     indx_0 = np.where(predicted_expert == 0)[0].tolist()
     indx_1 = np.where(predicted_expert == 1)[0].tolist()
     indx_2 = np.where(predicted_expert == 2)[0].tolist()
-    # print(indx_0, indx_1, indx_2)
     data_cond_0 = y_test_tensor[indx_0]
     data_cond_1 = y_test_tensor[indx_1]
     data_cond_2 = y_test_tensor[indx_2]
@@ -424,10 +350,10 @@ def intensity_regularization(gen_im_proton, intensity_proton, scaler_intensity, 
 
 def generate_and_save_images(model, epoch, noise, noise_cond, x_test,
                              photon_sum_proton_min, photon_sum_proton_max,
-                             device, random_generator):
+                             device, random_generator, shape_images=(56, 30)):
     if noise_cond is None:
         return None
-    SUPTITLE_TXT = f"\nModel: SDI-GAN proton data from {random_generator}" \
+    SUPTITLE_TXT = f"\nModel: SDI-GAN data from {random_generator}" \
                    f"\nPhotonsum interval: [{photon_sum_proton_min}, {photon_sum_proton_max}]" \
                    f"\nEPOCH: {epoch}"
 
@@ -441,13 +367,13 @@ def generate_and_save_images(model, epoch, noise, noise_cond, x_test,
     with torch.no_grad():
         noise = noise.to(device)
         noise_cond = noise_cond.to(device)
-        predictions = model(noise, noise_cond).cpu().numpy().reshape(-1, 56, 30)  # Move to CPU for numpy operations
+        predictions = model(noise, noise_cond).cpu().numpy().reshape(-1, *shape_images)  # Move to CPU for numpy operations
 
     fig, axs = plt.subplots(2, 6, figsize=(15, 5))
     fig.suptitle(SUPTITLE_TXT, x=0.1, horizontalalignment='left')
     for i in range(0, 12):
         if i < 6:
-            x = x_test[i].reshape(56, 30)
+            x = x_test[i].reshape(*shape_images)
         else:
             x = predictions[i - 6]
         im = axs[i // 6, i % 6].imshow(x, cmap='gnuplot')
@@ -473,16 +399,10 @@ def calculate_expert_distribution_loss(gating_probs, features, lambda_reg=0.1):
     # reshape the features from shape (batch_size) to (batch_size, 1)
     # Compute the pairwise Euclidean distance between the features
     pairwise_distances = torch.cdist(features, features, p=2)  # Shape: (batch_size, batch_size)
-    # print(pairwise_distances.shape)
-
-    # Assuming gating_probs is originally of type Long
-    # print(gating_probs.shape)
 
     # Compute the gating similarities (dot product of gating probabilities for each pair of samples)
     gating_similarities = torch.matmul(gating_probs, gating_probs.T)  # Shape: (batch_size, batch_size)
 
-    # print(gating_similarities.shape, pairwise_distances.shape)
-    # Regularization loss: sum of (gating_similarities * pairwise_distances)
     reg_loss = torch.sum(gating_similarities * pairwise_distances) / gating_similarities.size(0)
 
     # Apply the regularization strength
@@ -516,11 +436,6 @@ def calculate_expert_utilization_entropy(gating_probs, ENT_STRENGTH=0.1):
 
 
 class StratifiedBatchSampler:
-    """Stratified batch sampling
-    Provides equal representation of target classes in each batch.
-    Credits to rfeinman from forum:
-    - https://discuss.pytorch.org/t/how-to-enable-the-dataloader-to-sample-from-each-class-with-equal-probability/911/6
-    """
     def __init__(self, y, batch_size, shuffle=True):
         if torch.is_tensor(y):
             y = y.numpy()

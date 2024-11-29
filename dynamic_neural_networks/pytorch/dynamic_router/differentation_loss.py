@@ -47,6 +47,8 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
+import torch.optim.lr_scheduler as lr_scheduler
+
 from utils import (sum_channels_parallel, calculate_ws_ch_proton_model,
                    calculate_joint_ws_across_experts,
                    create_dir, save_scales, evaluate_router,
@@ -65,24 +67,24 @@ torch.autograd.set_detect_anomaly(True)
 
 # SETTINGS & PARAMETERS
 SAVE_EXPERIMENT_DATA = True
-WS_MEAN_SAVE_THRESHOLD = 3
+WS_MEAN_SAVE_THRESHOLD = 4
 DI_STRENGTH = 0.1
 IN_STRENGTH = 0.001
 AUX_STRENGTH = 0.001
 
 # Router loss parameters
-ED_STRENGTH = 0  # Strength on the expert distribution loss in the router loss calculation
-GEN_STRENGTH = 10  # Strength on the generator loss in the router loss calculation
+ED_STRENGTH = 0.01  # Strength on the expert distribution loss in the router loss calculation
+GEN_STRENGTH = 1  # Strength on the generator loss in the router loss calculation
 ENT_STRENGTH = 0.0001  # Strength on the expert utilization entropy in the router loss calculation
-DIFF_STRENGTH = 1e-4  # Differentation on the generator loss in the router loss calculation
+DIFF_STRENGTH = 0.00001  # Differentation on the generator loss in the router loss calculation
 STOP_ROUTER_TRAINING_EPOCH = 40
 
 N_RUNS = 2
 N_EXPERTS = 3
-BATCH_SIZE = 512
+BATCH_SIZE = 128
 NOISE_DIM = 10
 N_COND = 9  # number of conditional features
-EPOCHS = 200
+EPOCHS = 250
 LR_G = 1e-4
 LR_D = 1e-5
 LR_A = 1e-4
@@ -142,7 +144,7 @@ for _ in range(N_RUNS):
 
     x_train, x_test, x_train_2, x_test_2, y_train, y_test, std_train,\
     std_test, intensity_train, intensity_test, positions_train, positions_test = train_test_split(
-        data, data_2, data_cond, std, intensity, data_xy, test_size=0.2, shuffle=False)
+        data, data_2, data_cond, std, intensity, data_xy, test_size=0.2, shuffle=True)
 
     print("Data shapes:", x_train.shape, x_test.shape, y_train.shape, y_test.shape)
 
@@ -177,6 +179,8 @@ for _ in range(N_RUNS):
 
     router_network = RouterNetwork(N_COND, N_EXPERTS).to(device)
     router_optimizer = optim.Adam(router_network.parameters(), lr=LR_R)
+    # Define the learning rate scheduler
+    router_scheduler = lr_scheduler.ReduceLROnPlateau(router_optimizer, mode='min', patience=3, factor=0.1, verbose=True)
 
     # Define Auxiliary regressor
     aux_reg = AuxReg().to(device)
@@ -210,9 +214,6 @@ for _ in range(N_RUNS):
                                                                                                    intensity,
                                                                                                    scaler_intensity,
                                                                                                    IN_STRENGTH)
-
-        # differentation loss
-
 
         gen_loss = gen_loss + div_loss + intensity_loss
 
@@ -345,7 +346,7 @@ for _ in range(N_RUNS):
         # Calculate router loss
         #
         gen_loss_scaled = gen_losses.mean() * GEN_STRENGTH
-        expert_utilization_loss = calculate_expert_utilization_entropy(predicted_expert_one_hot.clone(), ENT_STRENGTH)
+        expert_entropy_loss = calculate_expert_utilization_entropy(predicted_expert_one_hot.clone(), ENT_STRENGTH)
         expert_distribution_loss = calculate_expert_distribution_loss(predicted_expert_one_hot.clone(),
                                                                       mean_intensities_in_batch_expert.reshape(-1, 1),
                                                                       ED_STRENGTH)
@@ -355,7 +356,7 @@ for _ in range(N_RUNS):
                                - (mean_intensities_experts[1] - mean_intensities_experts[2]) ** 2
 
         differentiation_loss = differentiation_loss * DIFF_STRENGTH
-        router_loss = gen_loss_scaled + expert_distribution_loss - expert_utilization_loss + differentiation_loss
+        router_loss = gen_loss_scaled + expert_distribution_loss - expert_entropy_loss + differentiation_loss
 
         if epoch < STOP_ROUTER_TRAINING_EPOCH:
             # Train Router Network
@@ -368,7 +369,8 @@ for _ in range(N_RUNS):
         return gen_losses, \
                disc_loss.item(), router_loss.item(), div_loss.cpu().item(), \
                intensity_loss.cpu().item(), aux_reg_loss.cpu().item(), class_counts.cpu().detach(), \
-               std_intensities_experts, mean_intensities_experts, expert_distribution_loss.item()
+               std_intensities_experts, mean_intensities_experts, expert_distribution_loss.item(), \
+               differentiation_loss.item(), expert_entropy_loss.item()
 
     # Training loop
     def train(train_loader, epochs, y_test):
@@ -381,6 +383,9 @@ for _ in range(N_RUNS):
             div_loss_epoch = []
             intensity_loss_epoch = []
             aux_reg_loss_epoch = []
+            expert_distribution_loss_epoch = []
+            differentiation_loss_epoch = []
+            expert_entropy_loss_epoch = []
             n_chosen_experts_0 = []
             n_chosen_experts_1 = []
             n_chosen_experts_2 = []
@@ -401,7 +406,8 @@ for _ in range(N_RUNS):
             for batch in train_loader:
                 gen_losses, disc_loss, router_loss, div_loss, intensity_loss, \
                 aux_reg_loss, n_chosen_experts_batch, std_intensities_experts, \
-                mean_intensities_experts, expert_distribution_loss = train_step(batch, epoch)
+                mean_intensities_experts, expert_distribution_loss, differentiation_loss,\
+                expert_entropy_loss = train_step(batch, epoch)
 
                 gen_losses_epoch.append(gen_losses)
                 disc_loss_epoch.append(disc_loss)
@@ -412,17 +418,15 @@ for _ in range(N_RUNS):
                 n_chosen_experts_0.append(n_chosen_experts_batch[0])
                 n_chosen_experts_1.append(n_chosen_experts_batch[1])
                 n_chosen_experts_2.append(n_chosen_experts_batch[2])
-                # n_chosen_experts_3.append(n_chosen_experts_batch[3])
                 mean_intensities_experts_0.append(mean_intensities_experts[0])  # [n_experts, BATCH_SIZE]
                 mean_intensities_experts_1.append(mean_intensities_experts[1])  # [n_experts, BATCH_SIZE]
                 mean_intensities_experts_2.append(mean_intensities_experts[2])  # [n_experts, BATCH_SIZE]
-                # mean_intensities_experts_3.append(mean_intensities_experts[3])  # [n_experts, BATCH_SIZE]
-                # expert_distributions.append(expert_distribution_loss)
-                # Calculate the aggregated standard deviation in one line
                 std_intensities_experts_0 = np.sqrt(np.mean(std_intensities_experts[0] ** 2))
                 std_intensities_experts_1 = np.sqrt(np.mean(std_intensities_experts[1] ** 2))
                 std_intensities_experts_2 = np.sqrt(np.mean(std_intensities_experts[2] ** 2))
-                # std_intensities_experts_3 = np.sqrt(np.mean(std_intensities_experts[3] ** 2))
+                expert_distribution_loss_epoch.append(expert_distribution_loss)
+                differentiation_loss_epoch.append(differentiation_loss)
+                expert_entropy_loss_epoch.append(expert_entropy_loss)
 
                 # disc_loss_epoch.append((disc_loss_0 + disc_loss_1 + disc_loss_2) / NUM_GENERATORS)
                 # router_loss_epoch.append((router_loss_0 + router_loss_1 + router_loss_2) / NUM_GENERATORS)
@@ -486,6 +490,7 @@ for _ in range(N_RUNS):
             #
             # ws_mean = np.array(ws_values).mean()
             epoch_time = time.time() - start
+            router_scheduler.step(ws_mean)
 
             # Log to WandB tool
             log_data = {
@@ -509,7 +514,9 @@ for _ in range(N_RUNS):
                 'mean_intensities_experts_1': np.mean(mean_intensities_experts_1),
                 'mean_intensities_experts_2': np.mean(mean_intensities_experts_2),
                 # 'mean_intensities_experts_3': np.mean(mean_intensities_experts_3),
-                'expert_distribution_loss': expert_distribution_loss,
+                'expert_distribution_loss': np.mean(expert_distribution_loss_epoch),
+                'differentiation_loss': np.mean(differentiation_loss_epoch),
+                'expert_entropy_loss': np.mean(expert_entropy_loss_epoch),
                 'disc_loss': np.mean(disc_loss_epoch),
                 'aux_reg_loss': np.mean(aux_reg_loss_epoch),
                 'n_choosen_experts_mean_epoch_0': np.mean(n_chosen_experts_0),
@@ -544,6 +551,7 @@ for _ in range(N_RUNS):
         "auxiliary_strength": AUX_STRENGTH,
         "Generator_strength": GEN_STRENGTH,
         "utilization_strength": ENT_STRENGTH,
+        "differentation_strength": DIFF_STRENGTH,
         "expert_distribution_strength": ED_STRENGTH,
         "Learning rate_generator": LR_G,
         "Learning rate_discriminator": LR_D,
@@ -561,12 +569,12 @@ for _ in range(N_RUNS):
     train_dataset = TensorDataset(torch.tensor(x_train), torch.tensor(x_train_2),
                                   torch.tensor(y_train), torch.tensor(std_train),
                                   torch.tensor(intensity_train), torch.tensor(positions_train))
-    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
+    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=False)
 
     test_dataset = TensorDataset(torch.tensor(x_test), torch.tensor(x_test_2),
                                  torch.tensor(y_test), torch.tensor(std_test),
                                  torch.tensor(intensity_test), torch.tensor(positions_test))
-    test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=True)
+    test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False)
 
     wandb.finish()
     wandb.init(

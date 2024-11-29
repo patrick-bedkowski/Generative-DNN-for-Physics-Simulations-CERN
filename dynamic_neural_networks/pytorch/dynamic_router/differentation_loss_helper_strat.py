@@ -66,18 +66,19 @@ torch.autograd.set_detect_anomaly(True)
 
 # SETTINGS & PARAMETERS
 SAVE_EXPERIMENT_DATA = True
-WS_MEAN_SAVE_THRESHOLD = 3
+WS_MEAN_SAVE_THRESHOLD = 3.5
 DI_STRENGTH = 0.1
 IN_STRENGTH = 0.001
 AUX_STRENGTH = 0.001
 
 # Router loss parameters
-ED_STRENGTH = 0.01  # Strength on the expert distribution loss in the router loss calculation
+ED_STRENGTH = 0  # Strength on the expert distribution loss in the router loss calculation
 GEN_STRENGTH = 0.1  # Strength on the generator loss in the router loss calculation
-UTIL_STRENGTH = 0.0001  # Strength on the expert utilization entropy in the router loss calculation
-DIFF_STRENGTH = 0.00001  # Differentation on the generator loss in the router loss calculation
-STOP_ROUTER_TRAINING_EPOCH = 50
-STOP_ROUTER_CROSS_ENTROPY_EPOCH = 30
+UTIL_STRENGTH = 1e-4  # Strength on the expert utilization entropy in the router loss calculation
+DIFF_STRENGTH = 1e-5  # Differentation on the generator loss in the router loss calculation
+CLIP_DIFF_LOSS = -10.0
+STOP_ROUTER_TRAINING_EPOCH = 60
+STOP_ROUTER_CROSS_ENTROPY_EPOCH = 40
 
 N_RUNS = 2
 N_EXPERTS = 3
@@ -194,9 +195,13 @@ for _ in range(N_RUNS):
     # Define the learning rate scheduler
     #router_scheduler = lr_scheduler.ReduceLROnPlateau(router_optimizer, mode='min', patience=3, factor=0.1, verbose=True)
 
-    # Define Auxiliary regressor
-    aux_reg = AuxReg().to(device)
-    aux_reg_optimizer = optim.Adam(aux_reg.parameters(), lr=LR_A)
+    # Define aux reg
+    aux_regs = []
+    for generator_idx in range(N_EXPERTS):
+        aux_reg = AuxReg().to(device)
+        aux_regs.append(aux_reg)
+    aux_reg_optimizers = [optim.Adam(aux_reg.parameters(), lr=LR_A) for aux_reg in aux_regs]
+
 
     def generator_train_step(gene, disc, a_reg, cond, g_optimizer, a_optimizer, criterion,
                              true_positions, std, intensity, class_counts, BATCH_SIZE):
@@ -230,7 +235,7 @@ for _ in range(N_RUNS):
         gen_loss = gen_loss + div_loss + intensity_loss
 
         # Train auxiliary regressor
-        aux_reg_optimizer.zero_grad()
+        g_optimizer.zero_grad()
         generated_positions = a_reg(fake_images)
 
         aux_reg_loss = aux_reg_criterion(true_positions, generated_positions, scaler_poz, AUX_STRENGTH)
@@ -336,16 +341,17 @@ for _ in range(N_RUNS):
             selected_std = std[selected_indices].clone()
             selected_generator = generators[i]
             selected_discriminator = discriminators[i]
+            selected_aux_reg = aux_regs[i]
             selected_class_counts = class_counts_adjusted[i]
 
             gen_loss, div_loss, intensity_loss, \
             aux_reg_loss, std_intensity, mean_intensity, mean_intensities = generator_train_step(selected_generator,
                                                                                                  selected_discriminator,
-                                                                                                 aux_reg,
+                                                                                                 selected_aux_reg,
                                                                                                  selected_cond,
                                                                                                  generator_optimizers[
                                                                                                      i],
-                                                                                                 aux_reg_optimizer,
+                                                                                                 aux_reg_optimizers[i],
                                                                                                  binary_cross_entropy_criterion,
                                                                                                  selected_true_positions,
                                                                                                  selected_std,
@@ -374,13 +380,16 @@ for _ in range(N_RUNS):
                                - (mean_intensities_experts[0] - mean_intensities_experts[2]) ** 2 \
                                - (mean_intensities_experts[1] - mean_intensities_experts[2]) ** 2
 
+        differentiation_loss = torch.clamp(torch.tensor(differentiation_loss, device=device), min=CLIP_DIFF_LOSS)
         differentiation_loss = differentiation_loss * DIFF_STRENGTH
+
 
         # calculate classification loss for router
         cross_entropy_loss = router_criterion(predicted_expert_one_hot, expert_assignments)
         cross_entropy_loss = cross_entropy_loss * max(0, 1 - epoch / STOP_ROUTER_CROSS_ENTROPY_EPOCH)
 
-        router_loss = cross_entropy_loss # (1-max(0, 1 - epoch/STOP_ROUTER_CROSS_ENTROPY_EPOCH))*(gen_loss_scaled + expert_distribution_loss - expert_entropy_loss + differentiation_loss)
+        router_loss = cross_entropy_loss*(1-max(0, 1 - epoch/STOP_ROUTER_CROSS_ENTROPY_EPOCH))*\
+                      (gen_loss_scaled + expert_distribution_loss - expert_entropy_loss + differentiation_loss)
 
         if epoch < STOP_ROUTER_TRAINING_EPOCH:
             # Train Router Network
@@ -484,23 +493,31 @@ for _ in range(N_RUNS):
             indices_expert_1 = np.where(predicted_expert.cpu().numpy() == 1)[0]
             indices_expert_2 = np.where(predicted_expert.cpu().numpy() == 2)[0]
             print(f"Len indices evaluation: . Original: {len(y_test_temp)}")
-            print(len(indices_expert_0)+len(indices_expert_1)+len(indices_expert_2))
 
             # calculate the ch_org for the test dataset for each expert
-            org_0 = np.exp(x_test[indices_expert_0]) - 1
-            ch_org_0 = np.array(org_0).reshape(-1, 56, 30)
-            del org_0
-            ch_org_0 = pd.DataFrame(sum_channels_parallel(ch_org_0)).values
+            if len(indices_expert_0) >0:
+                org_0 = np.exp(x_test[indices_expert_0]) - 1
+                ch_org_0 = np.array(org_0).reshape(-1, 56, 30)
+                del org_0
+                ch_org_0 = pd.DataFrame(sum_channels_parallel(ch_org_0)).values
+            else:
+                ch_org_0 = np.zeros((len(indices_expert_0), 5))
 
-            org_1 = np.exp(x_test[indices_expert_1]) - 1
-            ch_org_1 = np.array(org_1).reshape(-1, 56, 30)
-            del org_1
-            ch_org_1 = pd.DataFrame(sum_channels_parallel(ch_org_1)).values
+            if len(indices_expert_1) >0:
+                org_1 = np.exp(x_test[indices_expert_1]) - 1
+                ch_org_1 = np.array(org_1).reshape(-1, 56, 30)
+                del org_1
+                ch_org_1 = pd.DataFrame(sum_channels_parallel(ch_org_1)).values
+            else:
+                ch_org_1 = np.zeros((len(indices_expert_1), 5))
 
-            org_2 = np.exp(x_test[indices_expert_2]) - 1
-            ch_org_2 = np.array(org_2).reshape(-1, 56, 30)
-            del org_2
-            ch_org_2 = pd.DataFrame(sum_channels_parallel(ch_org_2)).values
+            if len(indices_expert_2) >0:
+                org_2 = np.exp(x_test[indices_expert_2]) - 1
+                ch_org_2 = np.array(org_2).reshape(-1, 56, 30)
+                del org_2
+                ch_org_2 = pd.DataFrame(sum_channels_parallel(ch_org_2)).values
+            else:
+                ch_org_2 = np.zeros((len(indices_expert_2), 5))
 
             # Calculate WS distance across all distribution
             ws_mean, ws_mean_0, ws_mean_1, ws_mean_2 = calculate_joint_ws_across_experts(min(epoch // 5 + 1, 5),
@@ -547,6 +564,7 @@ for _ in range(N_RUNS):
                 'div_loss': np.mean(div_loss_epoch),
                 'intensity_loss': np.mean(intensity_loss_epoch),
                 'router_loss': np.mean(router_loss_epoch),
+                'clip_diff_loss_value': CLIP_DIFF_LOSS,
                 'std_intensities_experts_0': np.mean(std_intensities_experts_0),
                 'std_intensities_experts_1': np.mean(std_intensities_experts_1),
                 'std_intensities_experts_2': np.mean(std_intensities_experts_2),

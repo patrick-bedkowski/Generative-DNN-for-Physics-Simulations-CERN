@@ -111,5 +111,4 @@ def make_histograms(noise_cond, expert, ch_org, device, noise_dim=9, batch_size=
         axis[i].set_yscale('log')
 
     fig.tight_layout(rect=[0, 0, 1, 0.975])
-    # fig.savefig("hist_orig.png")
     plt.show()
