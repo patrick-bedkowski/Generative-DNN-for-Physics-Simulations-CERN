@@ -8,128 +8,16 @@ import torch.nn.functional as F
 import matplotlib.pyplot as plt
 from typing import List
 from sklearn.model_selection import StratifiedKFold
-
-
-def get_channel_masks(input_array: np.ndarray):
-    """
-    Returns masks of 5 for input array.
-
-    input_array: Array of shape(N, M)
-    """
-
-    # Create a copy of the input array to use as the mask
-    mask = np.ones_like(input_array)
-    n, m = input_array.shape
-
-    # Define the pattern of checks
-    pattern = np.array([[0, 1], [1, 0]])
-
-    # Fill the input array with the pattern
-    for i in range(n):
-        for j in range(m):
-            mask[i, j] = pattern[i % 2, j % 2]
-
-    mask5 = np.ones_like(input_array) - mask
-
-    # Divide the mask into four equal rectangles
-    rows, cols = mask.shape
-    mid_row, mid_col = rows // 2, cols // 2
-
-    mask1 = mask.copy()
-    mask2 = mask.copy()
-    mask3 = mask.copy()
-    mask4 = mask.copy()
-
-    mask4[mid_row:, :] = 0
-    mask4[:, :mid_col] = 0
-
-    mask2[:, :mid_col] = 0
-    mask2[:mid_row, :] = 0
-
-    mask3[mid_row:, :] = 0
-    mask3[:, mid_col:] = 0
-
-    mask1[:, mid_col:] = 0
-    mask1[:mid_row, :] = 0
-
-    return mask1, mask2, mask3, mask4, mask5
-
-
-def sum_channels_parallel(data: np.ndarray):
-    """
-    Calculates the sum of 5 channels of input images. Each Input image is divided into 5 sections.
-
-    data: Array of shape(x, N, M)
-        Array of x images of the same size.
-    """
-    mask1, mask2, mask3, mask4, mask5 = get_channel_masks(data[0])
-
-    ch1 = (data * mask1).sum(axis=1).sum(axis=1)
-    ch2 = (data * mask2).sum(axis=1).sum(axis=1)
-    ch3 = (data * mask3).sum(axis=1).sum(axis=1)
-    ch4 = (data * mask4).sum(axis=1).sum(axis=1)
-    ch5 = (data * mask5).sum(axis=1).sum(axis=1)
-
-    return zip(ch1, ch2, ch3, ch4, ch5)
+from utils import sum_channels_parallel
 
 
 def get_max_value_image_coordinates(img):
     return np.unravel_index(np.argmax(img), img.shape)
 
 
-def calculate_image_features(images):
-    n_samples = images.shape[0]
-    max_values_x = []
-    max_values_y = []
-    centers_x = []
-    centers_y = []
-    non_zero_pixels = []
-
-    height, width = images.shape[1], images.shape[2]  # Image dimensions
-
-    for img in images:
-        # Max value across x and y directions
-        max_values_x.append(np.max(np.sum(img, axis=0)))  # Sum along rows (columns remain)
-        max_values_y.append(np.max(np.sum(img, axis=1)))  # Sum along columns (rows remain)
-
-        # Handle all-zero images
-        if np.sum(img > 0) == 0:  # Check if the image is all zeros
-            centers_x.append(width / 2)  # Default to center of the image
-            centers_y.append(height / 2)
-        else:
-            center = center_of_mass(img > 0)  # Use binary mask for center of mass
-            centers_x.append(center[1])  # x-center
-            centers_y.append(center[0])  # y-center
-
-        # Number of pixels > 0
-        non_zero_pixels.append(np.sum(img > 0))
-
-    # Convert to numpy arrays for easier manipulation
-    return np.array([max_values_x, max_values_y, centers_x, centers_y, non_zero_pixels])
-
-
-def create_dir(path, SAVE_EXPERIMENT_DATA):
-    if SAVE_EXPERIMENT_DATA:
-        isExist = os.path.exists(path)
-        if not isExist:
-            os.makedirs(path)
-
-
-def save_scales(model_name, scaler_means, scaler_scales, filepath):
-    out_fnm = f"{model_name}_scales.txt"
-    res = "#means"
-    for mean_ in scaler_means:
-        res += "\n" + str(mean_)
-    res += "\n\n#scales"
-    for scale_ in scaler_scales:
-        res += "\n" + str(scale_)
-
-    with open(filepath+out_fnm, mode="w") as f:
-        f.write(res)
-
-
 def calculate_joint_ws_across_experts(n_calc, x_tests: List, y_tests: List, generators: List,
-                                      ch_org, ch_org_expert, noise_dim, device, batch_size=64, n_experts=3,
+                                      ch_org, ch_org_expert, noise_dim, device, batch_size=64,
+                                      n_experts=3,
                                       shape_images=(56, 30)):
     """
     Calculates the Wasserstein (WS) distance across the whole distribution.
@@ -187,12 +75,20 @@ def calculate_joint_ws_across_experts(n_calc, x_tests: List, y_tests: List, gene
     ws_exp_runs = ws_exp.mean(axis=2)  # (n_calc, n_experts, 1)
     ws_mean_exp = ws_exp_runs.mean(axis=0)  # calculate mean for each expert
     print("ws mean", f'{ws_mean:.2f}', end=" ")
+    if n_experts == 4:
+        return ws_mean, ws_std, ws_mean_exp[0], ws_mean_exp[1], ws_mean_exp[2], ws_mean_exp[3]
+    elif n_experts == 5:
+        return ws_mean, ws_std, ws_mean_exp[0], ws_mean_exp[1], ws_mean_exp[2], ws_mean_exp[3], ws_mean_exp[4]
+    elif n_experts == 3:
+        return ws_mean, ws_std, ws_mean_exp[0], ws_mean_exp[1], ws_mean_exp[2]
+    elif n_experts == 2:
+        return ws_mean, ws_std, ws_mean_exp[0], ws_mean_exp[1]
+    elif n_experts == 1:
+        return ws_mean, ws_std, ws_mean_exp[0]
 
-    return ws_mean, ws_std, ws_mean_exp
 
-
-def get_predictions_from_generator_results(batch_size, num_samples, noise_dim,
-                                           device, y_test, generator, shape_images=(56, 30),
+def get_predictions_from_generator_results(generator, batch_size, num_samples, noise_dim,
+                                           device, y_test, shape_images=(56, 30),
                                            input_noise=None):
     num_batches = (num_samples + batch_size - 1) // batch_size  # Calculate number of batches
     results_all = np.zeros((num_samples, *shape_images))
@@ -303,20 +199,6 @@ def calculate_ws_ch_proton_model(n_calc, x_test, y_test, generator,
     for n, score in enumerate(ws):
         print("ch" + str(n + 1), f'{score:.2f}', end=" ")
     return ws_mean
-
-
-def evaluate_router(router_network, y_test, expert_number_test, accuracy_metric, precision_metric, recall_metric, f1_metric):
-    router_network.eval()
-    with torch.no_grad():
-        predicted_expert = router_network(y_test)
-        _, predicted_labels = torch.max(predicted_expert, 1)
-
-        accuracy = accuracy_metric(predicted_labels, expert_number_test).cpu().item()
-        precision = precision_metric(predicted_labels, expert_number_test).cpu().item()
-        recall = recall_metric(predicted_labels, expert_number_test).cpu().item()
-        f1 = f1_metric(predicted_labels, expert_number_test).cpu().item()
-
-    return accuracy, precision, recall, f1
 
 
 def sdi_gan_regularization(fake_latent, fake_latent_2, noise, noise_2, std, DI_STRENGTH):
@@ -495,4 +377,16 @@ class StratifiedBatchSampler:
         return len(self.y)
 
 
+def save_models(filepath_models, n_experts, generators, discriminators, router_network, epoch):
+    try:
+        for i in range(n_experts):
+            torch.save(generators[i].state_dict(), os.path.join(filepath_models, "gen_" + str(i) + "_" + str(epoch) + ".h5"))
+            torch.save(discriminators[i].state_dict(),
+                       os.path.join(filepath_models, "disc_" + str(i) + "_" + str(epoch) + ".h5"))
 
+        # save router
+        router_filename = f"router_network_epoch_{str(epoch)}.pth"
+        filepath_router = os.path.join(filepath_models, router_filename)
+        torch.save(router_network.state_dict(), filepath_router)
+    except Exception as e:
+        print(f"Error saving models: {e}")

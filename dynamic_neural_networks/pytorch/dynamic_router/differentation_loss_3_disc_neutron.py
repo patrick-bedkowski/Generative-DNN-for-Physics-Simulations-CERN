@@ -82,10 +82,10 @@ GEN_STRENGTH = 1e-1  # Strength on the generator loss in the router loss calcula
 UTIL_STRENGTH = 1e-3  # Strength on the expert utilization entropy in the router loss calculation
 DIFF_STRENGTH = 1e-5  # Differentation on the generator loss in the router loss calculation
 STOP_ROUTER_TRAINING_EPOCH = 40
-CLIP_DIFF_LOSS = -10.0
+CLIP_DIFF_LOSS = -1.0
 
 N_RUNS = 1
-N_EXPERTS = 3
+N_EXPERTS = 1
 BATCH_SIZE = 128
 NOISE_DIM = 10
 N_COND = 9  # number of conditional features
@@ -381,28 +381,32 @@ for _ in range(N_RUNS):
         #
         # Calculate router loss
         #
-        gen_loss_scaled = gen_losses.mean() * GEN_STRENGTH
-        expert_entropy_loss = calculate_expert_utilization_entropy(predicted_expert_one_hot.clone(), UTIL_STRENGTH)
-
-        expert_distribution_loss = calculate_expert_distribution_loss(predicted_expert_one_hot.clone(),
-                                                                      mean_intensities_in_batch_expert.reshape(-1, 1),
-                                                                      ED_STRENGTH) if ED_STRENGTH != 0. else torch.tensor(0.0)
-
-        differentiation_loss = - (mean_intensities_experts[0] - mean_intensities_experts[1]) ** 2 \
-                               - (mean_intensities_experts[0] - mean_intensities_experts[2]) ** 2 \
-                               - (mean_intensities_experts[1] - mean_intensities_experts[2]) ** 2
-
-        differentiation_loss = torch.clamp(torch.tensor(differentiation_loss, device=device), min=CLIP_DIFF_LOSS)
-
-        differentiation_loss = differentiation_loss * DIFF_STRENGTH
-        router_loss = gen_loss_scaled + expert_distribution_loss - expert_entropy_loss - differentiation_loss
+        # gen_loss_scaled = gen_losses.mean() * GEN_STRENGTH
+        # expert_entropy_loss = calculate_expert_utilization_entropy(predicted_expert_one_hot.clone(), UTIL_STRENGTH)
+        #
+        # expert_distribution_loss = calculate_expert_distribution_loss(predicted_expert_one_hot.clone(),
+        #                                                               mean_intensities_in_batch_expert.reshape(-1, 1),
+        #                                                               ED_STRENGTH) if ED_STRENGTH != 0. else torch.tensor(0.0)
+        #
+        # differentiation_loss = - (mean_intensities_experts[0] - mean_intensities_experts[1]) ** 2 \
+        #                        - (mean_intensities_experts[0] - mean_intensities_experts[2]) ** 2 \
+        #                        - (mean_intensities_experts[1] - mean_intensities_experts[2]) ** 2
+        #
+        # differentiation_loss = torch.clamp(torch.tensor(differentiation_loss, device=device), min=CLIP_DIFF_LOSS)
+        #
+        # differentiation_loss = differentiation_loss * DIFF_STRENGTH
+        # router_loss = gen_loss_scaled + expert_distribution_loss - expert_entropy_loss - differentiation_loss
 
         # if epoch < STOP_ROUTER_TRAINING_EPOCH:
         #     # Train Router Network
         #     router_loss.backward()
         #     router_optimizer.step()
         # else:
-        #     router_loss = torch.tensor(0.0)
+        #
+        router_loss = torch.tensor(0.0)
+        expert_distribution_loss = torch.tensor(0.0)
+        differentiation_loss = torch.tensor(0.0)
+        expert_entropy_loss = torch.tensor(0.0)
 
         gen_losses = [gen_loss.item() for gen_loss in gen_losses]
         return gen_losses, \
@@ -449,14 +453,14 @@ for _ in range(N_RUNS):
                 intensity_loss_epoch.append(intensity_loss)
                 aux_reg_loss_epoch.append(aux_reg_loss)
                 n_chosen_experts_0.append(n_chosen_experts_batch[0])
-                n_chosen_experts_1.append(n_chosen_experts_batch[1])
-                n_chosen_experts_2.append(n_chosen_experts_batch[2])
+                # n_chosen_experts_1.append(n_chosen_experts_batch[1])
+                # n_chosen_experts_2.append(n_chosen_experts_batch[2])
                 mean_intensities_experts_0.append(mean_intensities_experts[0])  # [n_experts, BATCH_SIZE]
-                mean_intensities_experts_1.append(mean_intensities_experts[1])  # [n_experts, BATCH_SIZE]
-                mean_intensities_experts_2.append(mean_intensities_experts[2])  # [n_experts, BATCH_SIZE]
+                # mean_intensities_experts_1.append(mean_intensities_experts[1])  # [n_experts, BATCH_SIZE]
+                # mean_intensities_experts_2.append(mean_intensities_experts[2])  # [n_experts, BATCH_SIZE]
                 std_intensities_experts_0 = np.sqrt(np.mean(std_intensities_experts[0] ** 2))
-                std_intensities_experts_1 = np.sqrt(np.mean(std_intensities_experts[1] ** 2))
-                std_intensities_experts_2 = np.sqrt(np.mean(std_intensities_experts[2] ** 2))
+                # std_intensities_experts_1 = np.sqrt(np.mean(std_intensities_experts[1] ** 2))
+                # std_intensities_experts_2 = np.sqrt(np.mean(std_intensities_experts[2] ** 2))
                 expert_distribution_loss_epoch.append(expert_distribution_loss)
                 differentiation_loss_epoch.append(differentiation_loss)
                 expert_entropy_loss_epoch.append(expert_entropy_loss)
@@ -512,33 +516,29 @@ for _ in range(N_RUNS):
             else:
                 ch_org_0 = np.zeros((len(indices_expert_0), 5))
 
-            if len(indices_expert_1) > 0:
-                org_1 = np.exp(x_test[indices_expert_1]) - 1
-                ch_org_1 = np.array(org_1).reshape(-1, 44, 44)
-                del org_1
-                ch_org_1 = pd.DataFrame(sum_channels_parallel(ch_org_1)).values
-            else:
-                ch_org_1 = np.zeros((len(indices_expert_1), 5))
+            # if len(indices_expert_1) > 0:
+            #     org_1 = np.exp(x_test[indices_expert_1]) - 1
+            #     ch_org_1 = np.array(org_1).reshape(-1, 44, 44)
+            #     del org_1
+            #     ch_org_1 = pd.DataFrame(sum_channels_parallel(ch_org_1)).values
+            # else:
+            #     ch_org_1 = np.zeros((len(indices_expert_1), 5))
 
-            if len(indices_expert_2) > 0:
-                org_2 = np.exp(x_test[indices_expert_2]) - 1
-                ch_org_2 = np.array(org_2).reshape(-1, 44, 44)
-                del org_2
-                ch_org_2 = pd.DataFrame(sum_channels_parallel(ch_org_2)).values
-            else:
-                ch_org_2 = np.zeros((len(indices_expert_2), 5))
+            # if len(indices_expert_2) > 0:
+            #     org_2 = np.exp(x_test[indices_expert_2]) - 1
+            #     ch_org_2 = np.array(org_2).reshape(-1, 44, 44)
+            #     del org_2
+            #     ch_org_2 = pd.DataFrame(sum_channels_parallel(ch_org_2)).values
+            # else:
+            #     ch_org_2 = np.zeros((len(indices_expert_2), 5))
 
-            print(ch_org_0.shape, ch_org_1.shape, ch_org_2.shape)
+            # print(ch_org_0.shape, ch_org_1.shape, ch_org_2.shape)
             # Calculate WS distance across all distribution
-            ws_mean, ws_std, ws_mean_0, ws_mean_1, ws_mean_2 = calculate_joint_ws_across_experts(min(epoch // 5 + 1, 5),
-                                                                                         [x_test[indices_expert_0],
-                                                                                          x_test[indices_expert_1],
-                                                                                          x_test[indices_expert_2]],
-                                                                                         [y_test[indices_expert_0],
-                                                                                          y_test[indices_expert_1],
-                                                                                          y_test[indices_expert_2]],
+            ws_mean, ws_std, ws_mean_0 = calculate_joint_ws_across_experts(min(epoch // 5 + 1, 5),
+                                                                                         [x_test[indices_expert_0]],
+                                                                                         [y_test[indices_expert_0]],
                                                                                          generators, ch_org,
-                                                                                         [ch_org_0, ch_org_1, ch_org_2],
+                                                                                         [ch_org_0],
                                                                                          NOISE_DIM, device,
                                                                                          n_experts=N_EXPERTS,
                                                                                          shape_images=(44, 44))
@@ -548,19 +548,19 @@ for _ in range(N_RUNS):
 
             start_gen_images = time.time()
             noise_cond_0 = y_test[indices_expert_0][IDX_GENERATE] if len(y_test[indices_expert_0]) > len(IDX_GENERATE) else None
-            noise_cond_1 = y_test[indices_expert_1][IDX_GENERATE] if len(y_test[indices_expert_1]) > len(IDX_GENERATE) else None
-            noise_cond_2 = y_test[indices_expert_2][IDX_GENERATE] if len(y_test[indices_expert_2]) > len(IDX_GENERATE) else None
+            # noise_cond_1 = y_test[indices_expert_1][IDX_GENERATE] if len(y_test[indices_expert_1]) > len(IDX_GENERATE) else None
+            # noise_cond_2 = y_test[indices_expert_2][IDX_GENERATE] if len(y_test[indices_expert_2]) > len(IDX_GENERATE) else None
             noise = torch.randn(len(IDX_GENERATE), NOISE_DIM, device=device)  # same noise vector for each expert
 
             plot_0 = generate_and_save_images(generators[0], epoch, noise, noise_cond_0, x_test[indices_expert_0],
                                               photon_sum_neutron_min, photon_sum_neutron_max, device, 'Expert 0',
                                               shape_images=(44, 44))
-            plot_1 = generate_and_save_images(generators[1], epoch, noise, noise_cond_1, x_test[indices_expert_1],
-                                              photon_sum_neutron_min, photon_sum_neutron_max, device, 'Expert 1',
-                                              shape_images=(44, 44))
-            plot_2 = generate_and_save_images(generators[2], epoch, noise, noise_cond_2, x_test[indices_expert_2],
-                                              photon_sum_neutron_min, photon_sum_neutron_max, device, 'Expert 2',
-                                              shape_images=(44, 44))
+            # plot_1 = generate_and_save_images(generators[1], epoch, noise, noise_cond_1, x_test[indices_expert_1],
+            #                                   photon_sum_neutron_min, photon_sum_neutron_max, device, 'Expert 1',
+            #                                   shape_images=(44, 44))
+            # plot_2 = generate_and_save_images(generators[2], epoch, noise, noise_cond_2, x_test[indices_expert_2],
+            #                                   photon_sum_neutron_min, photon_sum_neutron_max, device, 'Expert 2',
+            #                                   shape_images=(44, 44))
             end_gen_images = time.time() - start_gen_images
             print(f'Time for generating images: {end_gen_images:.2f} sec')
 
@@ -571,33 +571,33 @@ for _ in range(N_RUNS):
             log_data = {
                 'ws_mean': ws_mean,
                 'ws_mean_0': ws_mean_0,
-                'ws_mean_1': ws_mean_1,
-                'ws_mean_2': ws_mean_2,
+                # 'ws_mean_1': ws_mean_1,
+                # 'ws_mean_2': ws_mean_2,
                 'gen_loss_0': np.mean([gen_loss[0] for gen_loss in gen_losses_epoch]),
-                'gen_loss_1': np.mean([gen_loss[1] for gen_loss in gen_losses_epoch]),
-                'gen_loss_2': np.mean([gen_loss[2] for gen_loss in gen_losses_epoch]),
+                # 'gen_loss_1': np.mean([gen_loss[1] for gen_loss in gen_losses_epoch]),
+                # 'gen_loss_2': np.mean([gen_loss[2] for gen_loss in gen_losses_epoch]),
                 'div_loss': np.mean(div_loss_epoch),
                 'intensity_loss': np.mean(intensity_loss_epoch),
                 'router_loss': np.mean(router_loss_epoch),
                 'std_intensities_experts_0': np.mean(std_intensities_experts_0),
-                'std_intensities_experts_1': np.mean(std_intensities_experts_1),
-                'std_intensities_experts_2': np.mean(std_intensities_experts_2),
+                # 'std_intensities_experts_1': np.mean(std_intensities_experts_1),
+                # 'std_intensities_experts_2': np.mean(std_intensities_experts_2),
                 'mean_intensities_experts_0': np.mean(mean_intensities_experts_0),
-                'mean_intensities_experts_1': np.mean(mean_intensities_experts_1),
-                'mean_intensities_experts_2': np.mean(mean_intensities_experts_2),
+                # 'mean_intensities_experts_1': np.mean(mean_intensities_experts_1),
+                # 'mean_intensities_experts_2': np.mean(mean_intensities_experts_2),
                 'expert_distribution_loss': np.mean(expert_distribution_loss_epoch),
                 'differentiation_loss': np.mean(differentiation_loss_epoch),
                 'expert_entropy_loss': np.mean(expert_entropy_loss_epoch),
                 'disc_loss': np.mean(disc_loss_epoch),
                 'aux_reg_loss': np.mean(aux_reg_loss_epoch),
                 'n_choosen_experts_mean_epoch_0': np.mean(n_chosen_experts_0),
-                'n_choosen_experts_mean_epoch_1': np.mean(n_chosen_experts_1),
-                'n_choosen_experts_mean_epoch_2': np.mean(n_chosen_experts_2),
+                # 'n_choosen_experts_mean_epoch_1': np.mean(n_chosen_experts_1),
+                # 'n_choosen_experts_mean_epoch_2': np.mean(n_chosen_experts_2),
                 'epoch_time': epoch_time,
                 'epoch': epoch,
                 'plot_expert_0': wandb.Image(plot_0) if not plot_0 is None else None,
-                'plot_expert_1': wandb.Image(plot_1) if not plot_1 is None else None,
-                'plot_expert_2': wandb.Image(plot_2) if not plot_2 is None else None
+                # 'plot_expert_1': wandb.Image(plot_1) if not plot_1 is None else None,
+                # 'plot_expert_2': wandb.Image(plot_2) if not plot_2 is None else None
             }
 
             wandb.log(log_data)
@@ -620,6 +620,7 @@ for _ in range(N_RUNS):
         "Model": NAME,
         "dataset": "neutron_data",
         "epochs": EPOCHS,
+        "n_experts": N_EXPERTS,
         "Date": DATE_STR,
         "Neutron_min": photon_sum_neutron_min,
         "Neutron_max": photon_sum_neutron_max,
