@@ -37,7 +37,7 @@ def transform_data_for_training(data_cond, data, data_posi, EXPERIMENT_DIR_NAME,
     scaler_intensity = MinMaxScaler()
     intensity = data_cond["proton_photon_sum"].values.reshape(-1, 1)
     intensity = np.float32(intensity)
-    intensity = scaler_intensity.fit_transform(intensity)
+    # intensity = scaler_intensity.fit_transform(intensity)
     print("intensity max", intensity.max(), "min", intensity.min())
 
     # Auxiliary regressor
@@ -46,10 +46,12 @@ def transform_data_for_training(data_cond, data, data_posi, EXPERIMENT_DIR_NAME,
     data_xy = scaler_poz.fit_transform(data_xy)
     print('Load positions:', data_xy.shape, "cond max", data_xy.max(), "min", data_xy.min())
 
+    data_cond = data_cond.drop(columns=["std_proton", "proton_photon_sum",
+                                        'group_number_proton',
+                                        'expert_number'])
+    data_cond_names = data_cond.columns
     scaler_cond = StandardScaler()
-    data_cond = scaler_cond.fit_transform(data_cond.drop(columns=["std_proton", "proton_photon_sum",
-                                                                  'group_number_proton',
-                                                                  'expert_number'])).astype(np.float32)
+    data_cond = scaler_cond.fit_transform(data_cond.astype(np.float32))
 
 
 
@@ -72,6 +74,6 @@ def transform_data_for_training(data_cond, data, data_posi, EXPERIMENT_DIR_NAME,
 
     return x_train, x_test, x_train_2, x_test_2, y_train, y_test, std_train, std_test,\
            intensity_train, intensity_test, positions_train, positions_test, expert_number_train,\
-           expert_number_test, scaler_intensity, scaler_poz, filepath_models
+           expert_number_test, scaler_intensity, scaler_poz, data_cond_names, filepath_models
 
 

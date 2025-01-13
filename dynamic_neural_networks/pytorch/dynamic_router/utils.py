@@ -8,6 +8,9 @@ import torch.nn.functional as F
 import matplotlib.pyplot as plt
 from typing import List
 from sklearn.model_selection import StratifiedKFold
+from sklearn.decomposition import PCA
+from sklearn.manifold import TSNE
+import seaborn as sns
 
 
 def get_channel_masks(input_array: np.ndarray):
@@ -336,7 +339,7 @@ def sdi_gan_regularization(fake_latent, fake_latent_2, noise, noise_2, std, DI_S
     return div_loss
 
 
-def intensity_regularization(gen_im_proton, intensity_proton, scaler_intensity, IN_STRENGTH):
+def intensity_regularization(gen_im_proton, intensity_proton, scaler_intensity, IN_STRENGTH, device):
     """
     Computes the intensity regularization loss for generated images, returning the loss, the sum of intensities per image,
     and the mean and standard deviation of the intensity across the batch.
@@ -357,11 +360,8 @@ def intensity_regularization(gen_im_proton, intensity_proton, scaler_intensity, 
     """
 
     # Sum the intensities in the generated images
-    sum_all_axes_p = torch.sum(gen_im_proton, dim=[2, 3], keepdim=True)  # Sum along all but batch dimension
-    sum_all_axes_p = sum_all_axes_p.reshape(-1, 1)  # Scale and reshape back to (batch_size, 1)
-
-    # Sum the intensities in the generated images
-    gen_im_proton_rescaled = torch.exp(gen_im_proton.clone().detach()) - 1
+    # gen_im_proton_rescaled = torch.exp(gen_im_proton.clone().detach()) - 1
+    gen_im_proton_rescaled = torch.exp(gen_im_proton) - 1
     sum_all_axes_p_rescaled = torch.sum(gen_im_proton_rescaled, dim=[2, 3], keepdim=True)  # Sum along all but batch dimension
     sum_all_axes_p_rescaled = sum_all_axes_p_rescaled.reshape(-1, 1)  # Scale and reshape back to (batch_size, 1)
 
@@ -369,22 +369,27 @@ def intensity_regularization(gen_im_proton, intensity_proton, scaler_intensity, 
     std_intensity_scaled = sum_all_axes_p_rescaled.std()
     mean_intensity_scaled = sum_all_axes_p_rescaled.mean()
     # remove the log from the predictions
-    # print(sum_all_axes_p_rescaled)
-    # print(mean_intensity_scaled)
 
-    # DELETED THE SCALING
-
-    # Manually scale using the parameters from the fitted MinMaxScaler
-    # data_min = torch.tensor(scaler_intensity.data_min_, device=gen_im_proton.device, dtype=torch.float32)
-    # data_max = torch.tensor(scaler_intensity.data_max_, device=gen_im_proton.device, dtype=torch.float32)
+    # FIXED SCALING OF INTENSITY
+    # cpu_tensor = sum_all_axes_p_rescaled.detach().cpu().numpy()
+    # # Validate and handle invalid values
+    # if not np.all(np.isfinite(cpu_tensor)):
+    #     # Replace invalid values with zeros or another appropriate default
+    #     cpu_tensor = np.nan_to_num(cpu_tensor, nan=100.0, posinf=100.0, neginf=-100.0)
     #
-    # sum_all_axes_p_scaled = (sum_all_axes_p - data_min) / (data_max - data_min)
-    # Ensure intensity_proton is correctly shaped and on the same device
+    # inverted_scale_intensity = scaler_intensity.inverse_transform(cpu_tensor)  # inverse the scaling on the
+    # inverted_scale_intensity = torch.tensor(inverted_scale_intensity, device=device, dtype=torch.float32)
+
+    # # Ensure intensity_proton is correctly shaped and on the same device
     intensity_proton = intensity_proton.view(-1, 1).to(gen_im_proton.device)  # Ensure it is of shape [batch_size, 1]
 
     # Calculate MAE loss
-    mae_value_p = F.l1_loss(sum_all_axes_p, intensity_proton)
-    return IN_STRENGTH * mae_value_p, sum_all_axes_p, std_intensity_scaled.detach(), mean_intensity_scaled.detach()
+    mae_value_p = F.l1_loss(sum_all_axes_p_rescaled, intensity_proton)*IN_STRENGTH
+    # mae_value_p = torch.clamp(torch.tensor(mae_value_p, device=device), max=1)
+
+    # consider replacing sum_all_axes_p_rescaled with inverted_scale_intensity if going for scaling approach
+    return mae_value_p, sum_all_axes_p_rescaled, std_intensity_scaled.detach(),\
+           mean_intensity_scaled.detach()
 
 
 def generate_and_save_images(model, epoch, noise, noise_cond, x_test,
@@ -460,7 +465,7 @@ def calculate_entropy(p):
 def calculate_expert_utilization_entropy(gating_probs, ENT_STRENGTH=0.1):
     """
     Calculate the expert utilization entropy H_u.
-
+    To promote fair utilization of experts, maximize this term.
     Parameters:
     gating_probs (torch.Tensor): A tensor of shape (N, M) where N is the number of samples
                                  and M is the number of experts. Each entry is the gating
@@ -469,7 +474,7 @@ def calculate_expert_utilization_entropy(gating_probs, ENT_STRENGTH=0.1):
     Returns:
     torch.Tensor: The entropy of the average gating probabilities.
     """
-    avg_gating_probs = torch.mean(gating_probs, dim=0)  # Average over samples. The sum of that is  equal roughly to 1
+    avg_gating_probs = torch.mean(gating_probs, dim=0)  # Average over samples. The sum of that is equal roughly to 1
     entropy = calculate_entropy(avg_gating_probs)
     return entropy * ENT_STRENGTH
 
@@ -493,6 +498,106 @@ class StratifiedBatchSampler:
 
     def __len__(self):
         return len(self.y)
+
+
+def plot_cond_pca_tsne(y_test_temp, indices_experts, epoch):
+    """
+    Plot PCA and t-SNE 2D projections with data points colored by expert indices.
+
+    Parameters:
+    y_test_temp (np.ndarray): The data to project.
+    indices_experts (list of np.ndarray): List of indices for each expert.
+    N_EXPERTS (int): Number of experts.
+    """
+    # Create labels for each data point based on indices_experts
+    SUPTITLE_TXT = f"\nEPOCH: {epoch}"
+
+    labels = np.zeros(y_test_temp.shape[0], dtype=int)
+    for expert_idx, indices in enumerate(indices_experts):
+        labels[indices] = expert_idx
+
+    # PCA projection
+    pca = PCA(n_components=2)
+    y_pca = pca.fit_transform(y_test_temp)
+
+    # t-SNE projection
+    tsne = TSNE(n_components=2, random_state=42, perplexity=30, n_iter=1000)
+    y_tsne = tsne.fit_transform(y_test_temp)
+
+    # Plot PCA and t-SNE projections
+    fig, axes = plt.subplots(1, 2, figsize=(12, 6))
+
+    fig.suptitle(SUPTITLE_TXT, x=0.1, horizontalalignment='left')
+
+    # Plot PCA
+    scatter = axes[0].scatter(y_pca[:, 0], y_pca[:, 1], c=labels, cmap='viridis', s=10)
+    axes[0].set_title('PCA Projection')
+    axes[0].set_xlabel('PC1')
+    axes[0].set_ylabel('PC2')
+    legend1 = axes[0].legend(*scatter.legend_elements(), title="Experts")
+    axes[0].add_artist(legend1)
+
+    # Plot t-SNE
+    scatter = axes[1].scatter(y_tsne[:, 0], y_tsne[:, 1], c=labels, cmap='viridis', s=10)
+    axes[1].set_title('t-SNE Projection')
+    axes[1].set_xlabel('Dim 1')
+    axes[1].set_ylabel('Dim 2')
+    legend2 = axes[1].legend(*scatter.legend_elements(), title="Experts")
+    axes[1].add_artist(legend2)
+
+    return fig
+
+
+def plot_expert_heatmap(y_test, indices_experts, epoch, data_cond_names, num_bins=10):
+    """
+    Create a heatmap showing the distribution of samples across bins (OX axis) and experts (OY axis) for all 9 variables.
+
+    Parameters:
+    y_test (np.ndarray or torch.Tensor): The data containing continuous variables (shape: [n_samples, num_variables]).
+    indices_experts (list of np.ndarray): List of indices for each expert.
+    num_bins (int): Number of bins to divide the continuous OX axis.
+
+    Returns:
+    matplotlib.figure.Figure: The generated figure with 9 subplots.
+    """
+    # Convert y_test to NumPy array if it is a PyTorch tensor
+    y_test_np = y_test.cpu().numpy() if isinstance(y_test, torch.Tensor) else y_test
+
+    # Ensure y_test has 9 variables
+    num_variables = y_test_np.shape[1]
+    if num_variables != len(data_cond_names):
+        raise ValueError(f"y_test must have exactly {len(data_cond_names)} variables")
+
+    # Create a figure with 9 subplots (3x3 grid)
+    fig, axes = plt.subplots(3, 3, figsize=(18, 12))
+    fig.suptitle(f"Sample Distribution Across Experts and Continuous Bins. Epoch {epoch}", fontsize=16)
+    print(data_cond_names)
+    # Loop through each variable and create a heatmap
+    for var_idx, var_name in enumerate(data_cond_names):
+        ax = axes[var_idx // 3, var_idx % 3]
+
+        # Define bins for the continuous OX axis
+        continuous_variable = y_test_np[:, var_idx]  # Current variable
+        bins = np.linspace(continuous_variable.min(), continuous_variable.max(), num_bins + 1)
+        bin_labels = [f"{bins[i]:.2f}-{bins[i+1]:.2f}" for i in range(num_bins)]
+
+        # Initialize a DataFrame to store counts
+        heatmap_data = pd.DataFrame(0, index=[f"E{i+1}" for i in range(len(indices_experts))], columns=bin_labels)
+
+        # Count samples for each expert and bin
+        for expert_idx, indices in enumerate(indices_experts):
+            binned_data = pd.cut(continuous_variable[indices], bins=bins, labels=bin_labels, include_lowest=True)
+            counts = binned_data.value_counts().reindex(bin_labels, fill_value=0)
+            heatmap_data.loc[f"E{expert_idx+1}"] = counts.values
+
+        # Create the heatmap
+        sns.heatmap(heatmap_data, annot=True, fmt="d", cmap="Blues", cbar=False, ax=ax)
+        ax.set_title(f"{var_name}")
+        ax.set_xlabel("Bins")
+        ax.set_ylabel("Experts)")
+
+    plt.tight_layout(rect=[0, 0, 1, 0.95])  # Adjust layout to fit the title
+    return fig
 
 
 

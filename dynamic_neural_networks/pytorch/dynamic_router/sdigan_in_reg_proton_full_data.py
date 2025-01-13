@@ -147,11 +147,11 @@ for _ in range(N_RUNS):
     aux_reg_criterion = regressor_loss
 
     # Define experts
-    generator = Generator(NOISE_DIM, N_COND).to(device)
+    generator = Generator(NOISE_DIM, N_COND, DI_STRENGTH, IN_STRENGTH).to(device)
     generator_optimizer = optim.Adam(generator.parameters(), lr=LR_G)
 
     # Initialize single discriminator
-    discriminator = Discriminator(N_COND, 1).to(device)
+    discriminator = Discriminator(N_COND).to(device)
     discriminator_optimizer = optim.Adam(discriminator.parameters(), lr=LR_D)
 
     # Define Auxiliary regressor
@@ -185,8 +185,8 @@ for _ in range(N_RUNS):
         intensity_loss, mean_intenisties, std_intensity, mean_intensity = intensity_regularization(fake_images,
                                                                                                    intensity,
                                                                                                    scaler_intensity,
-                                                                                                   IN_STRENGTH)
-
+                                                                                                   gene.in_strength,
+                                                                                                   device)
         gen_loss = gen_loss + div_loss + intensity_loss
 
         # Train auxiliary regressor
