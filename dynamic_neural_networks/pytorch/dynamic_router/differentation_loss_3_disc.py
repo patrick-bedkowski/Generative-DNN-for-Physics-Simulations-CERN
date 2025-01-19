@@ -57,7 +57,7 @@ from utils import (sum_channels_parallel, calculate_ws_ch_proton_model,
                    regressor_loss, calculate_expert_utilization_entropy,
                    StratifiedBatchSampler, plot_cond_pca_tsne, plot_expert_heatmap)
 from data_transformations import transform_data_for_training
-from training_setup import setup_experts, setup_router
+from training_setup import setup_experts, setup_router, load_checkpoint_weights
 from training_utils import save_models
 
 
@@ -76,18 +76,18 @@ SAVE_EXPERIMENT_DATA = True
 PLOT_IMAGES = True
 
 # SETTINGS & PARAMETERS
-WS_MEAN_SAVE_THRESHOLD = 2.3
+WS_MEAN_SAVE_THRESHOLD = 3.5
 DI_STRENGTH = 0.1
 IN_STRENGTH = 1e-3  #0.001
 IN_STRENGTH_LOWER_VAL = 0.001  # 0.000001
 AUX_STRENGTH = 0.001
 
 N_RUNS = 1
-N_EXPERTS = 3
+N_EXPERTS = 5
 BATCH_SIZE = 256
 NOISE_DIM = 10
 N_COND = 9  # number of conditional features
-EPOCHS = 150
+EPOCHS = 250
 LR_G = 1e-4
 LR_D = 1e-5
 LR_A = 1e-4
@@ -95,9 +95,9 @@ LR_R = 1e-3
 
 # Router loss parameters
 ED_STRENGTH = 0 #0.01  # Strength on the expert distribution loss in the router loss calculation
-GEN_STRENGTH = 1e-0  # Strength on the generator loss in the router loss calculation
-UTIL_STRENGTH = 1e-3  # Strength on the expert utilization entropy in the router loss calculation
+GEN_STRENGTH = 1e-1  # Strength on the generator loss in the router loss calculation
 DIFF_STRENGTH = 1e-4  # Differentation on the generator loss in the router loss calculation
+UTIL_STRENGTH = 1e-2  # Strength on the expert utilization entropy in the router loss calculation
 STOP_ROUTER_TRAINING_EPOCH = EPOCHS
 CLIP_DIFF_LOSS = "No-clip" #-1.0
 
@@ -107,7 +107,7 @@ DATA_COND_PATH = "/net/tscratch/people/plgpbedkowski/data/data_cond_photonsum_pr
 DATA_POSITIONS_PATH = "/net/tscratch/people/plgpbedkowski/data/data_coord_proton_photonsum_proton_1_2312.pkl"
 INPUT_IMAGE_SHAPE = (56, 30)
 
-NAME = f"PARAM_SWEEP_no_clip_loss_sep_aux_3_exp_diff_expert_distribution_utilization_{ED_STRENGTH}_{GEN_STRENGTH}_{UTIL_STRENGTH}_no_stop_{STOP_ROUTER_TRAINING_EPOCH}"
+NAME = f"after_intensity_fix_PARAM_SWEEP_no_clip_loss_sep_aux_3_exp_diff_expert_distribution_utilization_{ED_STRENGTH}_{GEN_STRENGTH}_{UTIL_STRENGTH}_no_stop_{STOP_ROUTER_TRAINING_EPOCH}"
 # NAME = f"Sanitycheck-intenisty-clamp-max-1-expert"
 # NAME = f"removed-detach-from-intensity-Sanitycheck-intenisty-with-scaler-on-the-input-and-output-expert-without-clamp-1"
 # NAME = f"test_modified_intensity_refactoring_test_3_disc_expertsim"
@@ -127,7 +127,7 @@ for _ in range(N_RUNS):
     ### TRANSFORM DATA FOR TRAINING ###
     x_train, x_test, x_train_2, x_test_2, y_train, y_test, std_train, std_test, \
     intensity_train, intensity_test, positions_train, positions_test, expert_number_train, \
-    expert_number_test, scaler_intensity, scaler_poz, data_cond_names, filepath_models = transform_data_for_training(
+    expert_number_test, scaler_poz, data_cond_names, filepath_models = transform_data_for_training(
         data_cond, data,
         data_posi,
         EXPERIMENT_DIR_NAME,
@@ -148,6 +148,17 @@ for _ in range(N_RUNS):
                                                                            LR_A, DI_STRENGTH, IN_STRENGTH, device)
     router_network, router_optimizer = setup_router(N_COND, N_EXPERTS, LR_R, device)
 
+    # saved_run_data = "experiments/after_intensity_fix_PARAM_SWEEP_no_clip_loss_sep_aux_3_exp_diff_expert_distribution_utilization_0_0.1_0.01_no_stop_250_0.0001_1e-05_0.001_13_01_2025_08_42_11_1_2312_13_01_2025_08_42_11/models"
+    epoch_to_load = None
+    # # Load weights
+    # load_checkpoint_weights(
+    #     saved_run_data,
+    #     epoch_to_load,
+    #     generators,
+    #     discriminators,
+    #     router_network,
+    #     device=device
+    # )
 
     def generator_train_step(generator, discriminator, a_reg, cond, g_optimizer, a_optimizer, criterion,
                              true_positions, std, intensity, class_counts, BATCH_SIZE):
@@ -175,9 +186,7 @@ for _ in range(N_RUNS):
 
         intensity_loss, mean_intenisties, std_intensity, mean_intensity = intensity_regularization(fake_images,
                                                                                                    intensity,
-                                                                                                   scaler_intensity,
-                                                                                                   generator.in_strength,
-                                                                                                   device)
+                                                                                                   generator.in_strength)
 
         gen_loss = gen_loss + div_loss + intensity_loss
 
@@ -355,7 +364,11 @@ for _ in range(N_RUNS):
     # Training loop
     def train(train_loader, epochs, y_test):
         history = []
-        for epoch in range(0, epochs):
+        if epoch_to_load is None:
+            start_epoch = 0
+        else:
+            start_epoch = epoch_to_load + 1
+        for epoch in range(start_epoch, epochs):
             start = time.time()
             gen_losses_epoch = []
             disc_losses_epoch = []
@@ -513,7 +526,7 @@ for _ in range(N_RUNS):
 
             # save models if all generators pass threshold
             if ws_mean < WS_MEAN_SAVE_THRESHOLD:
-                save_models(filepath_models, N_EXPERTS, generators, discriminators, router_network, epoch)
+                save_models(filepath_models, N_EXPERTS, aux_regs, generators, discriminators, router_network, epoch)
 
             print(f'Time for epoch {epoch} is {epoch_time:.2f} sec')
 

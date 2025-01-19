@@ -339,7 +339,7 @@ def sdi_gan_regularization(fake_latent, fake_latent_2, noise, noise_2, std, DI_S
     return div_loss
 
 
-def intensity_regularization(gen_im_proton, intensity_proton, scaler_intensity, IN_STRENGTH, device):
+def intensity_regularization(gen_im_proton, intensity_proton, IN_STRENGTH):
     """
     Computes the intensity regularization loss for generated images, returning the loss, the sum of intensities per image,
     and the mean and standard deviation of the intensity across the batch.
@@ -347,8 +347,6 @@ def intensity_regularization(gen_im_proton, intensity_proton, scaler_intensity, 
     Args:
         gen_im_proton (torch.Tensor): A tensor of generated images with shape [batch_size, channels, height, width].
         intensity_proton (torch.Tensor): A tensor representing the target intensity values for the batch, with shape [batch_size].
-        scaler_intensity (object): A scaler object used to normalize the intensity values, typically an instance of a
-                                   scaler from `sklearn.preprocessing` (e.g., `StandardScaler`).
         IN_STRENGTH (float): A scalar that controls the strength of the intensity regularization in the final loss.
 
     Returns:
@@ -360,7 +358,7 @@ def intensity_regularization(gen_im_proton, intensity_proton, scaler_intensity, 
     """
 
     # Sum the intensities in the generated images
-    # gen_im_proton_rescaled = torch.exp(gen_im_proton.clone().detach()) - 1
+    # gen_im_proton_rescaled = torch.exp(gen_im_proton.clone().detach()) - 1 <- this fixed previous bad optimization
     gen_im_proton_rescaled = torch.exp(gen_im_proton) - 1
     sum_all_axes_p_rescaled = torch.sum(gen_im_proton_rescaled, dim=[2, 3], keepdim=True)  # Sum along all but batch dimension
     sum_all_axes_p_rescaled = sum_all_axes_p_rescaled.reshape(-1, 1)  # Scale and reshape back to (batch_size, 1)
@@ -368,26 +366,13 @@ def intensity_regularization(gen_im_proton, intensity_proton, scaler_intensity, 
     # Compute mean and std as PyTorch tensors
     std_intensity_scaled = sum_all_axes_p_rescaled.std()
     mean_intensity_scaled = sum_all_axes_p_rescaled.mean()
-    # remove the log from the predictions
-
-    # FIXED SCALING OF INTENSITY
-    # cpu_tensor = sum_all_axes_p_rescaled.detach().cpu().numpy()
-    # # Validate and handle invalid values
-    # if not np.all(np.isfinite(cpu_tensor)):
-    #     # Replace invalid values with zeros or another appropriate default
-    #     cpu_tensor = np.nan_to_num(cpu_tensor, nan=100.0, posinf=100.0, neginf=-100.0)
-    #
-    # inverted_scale_intensity = scaler_intensity.inverse_transform(cpu_tensor)  # inverse the scaling on the
-    # inverted_scale_intensity = torch.tensor(inverted_scale_intensity, device=device, dtype=torch.float32)
 
     # # Ensure intensity_proton is correctly shaped and on the same device
     intensity_proton = intensity_proton.view(-1, 1).to(gen_im_proton.device)  # Ensure it is of shape [batch_size, 1]
 
     # Calculate MAE loss
     mae_value_p = F.l1_loss(sum_all_axes_p_rescaled, intensity_proton)*IN_STRENGTH
-    # mae_value_p = torch.clamp(torch.tensor(mae_value_p, device=device), max=1)
 
-    # consider replacing sum_all_axes_p_rescaled with inverted_scale_intensity if going for scaling approach
     return mae_value_p, sum_all_axes_p_rescaled, std_intensity_scaled.detach(),\
            mean_intensity_scaled.detach()
 

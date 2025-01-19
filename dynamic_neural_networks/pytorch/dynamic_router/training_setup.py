@@ -2,6 +2,7 @@ from models_pytorch import Generator, Discriminator, RouterNetwork, AuxReg
 
 import torch
 import torch.optim as optim
+import os
 
 
 def setup_experts(N_EXPERTS, N_COND, NOISE_DIM, LR_G, LR_D, LR_A, DI_STRENGTH, IN_STRENGTH, device=torch.device("cuda:0")):
@@ -50,3 +51,41 @@ def setup_router(N_COND, N_EXPERTS, LR_R, device=torch.device("cuda:0")):
     # Define the learning rate scheduler
     # router_scheduler = lr_scheduler.ReduceLROnPlateau(router_optimizer, mode='min', patience=3, factor=0.1, verbose=True)
     return router_network, router_optimizer
+
+def load_checkpoint_weights(checkpoint_dir, epoch, generators, discriminators, router_network, device="cuda"):
+    """
+    Load weights for generators, discriminators, and router network from a specific checkpoint directory and epoch.
+
+    Args:
+        checkpoint_dir (str): Path to the checkpoint directory.
+        epoch (int): Epoch for which the weights should be loaded.
+        generators (list): List of generator models.
+        discriminators (list): List of discriminator models.
+        router_network (nn.Module): Router network model.
+        device (str): Device to load the weights onto.
+    """
+    # Load generator weights
+    for i, generator in enumerate(generators):
+        gen_file = os.path.join(checkpoint_dir, f"gen_{i}_{epoch}.h5")
+        if os.path.exists(gen_file):
+            print(f"Loading generator {i} weights from {gen_file}")
+            generator.load_state_dict(torch.load(gen_file, map_location=device))
+        else:
+            print(f"Generator {i} weights not found for epoch {epoch}")
+
+    # Load discriminator weights
+    for i, discriminator in enumerate(discriminators):
+        disc_file = os.path.join(checkpoint_dir, f"disc_{i}_{epoch}.h5")
+        if os.path.exists(disc_file):
+            print(f"Loading discriminator {i} weights from {disc_file}")
+            discriminator.load_state_dict(torch.load(disc_file, map_location=device))
+        else:
+            print(f"Discriminator {i} weights not found for epoch {epoch}")
+
+    # Load router network weights
+    router_file = os.path.join(checkpoint_dir, f"router_network_epoch_{epoch}.pth")
+    if os.path.exists(router_file):
+        print(f"Loading router network weights from {router_file}")
+        router_network.load_state_dict(torch.load(router_file, map_location=device))
+    else:
+        print(f"Router network weights not found for epoch {epoch}")

@@ -377,12 +377,15 @@ class StratifiedBatchSampler:
         return len(self.y)
 
 
-def save_models(filepath_models, n_experts, generators, discriminators, router_network, epoch):
+def save_models(filepath_models, n_experts, aux_regs, generators, discriminators, router_network, epoch):
     try:
         for i in range(n_experts):
-            torch.save(generators[i].state_dict(), os.path.join(filepath_models, "gen_" + str(i) + "_" + str(epoch) + ".h5"))
+            torch.save(generators[i].state_dict(),
+                       os.path.join(filepath_models, "gen_" + str(i) + "_" + str(epoch) + ".h5"))
             torch.save(discriminators[i].state_dict(),
                        os.path.join(filepath_models, "disc_" + str(i) + "_" + str(epoch) + ".h5"))
+            torch.save(aux_regs[i].state_dict(), os.path.join(filepath_models,
+                                                              "aux_reg_" + str(i) + "_" + str(epoch) + ".h5"))
 
         # save router
         router_filename = f"router_network_epoch_{str(epoch)}.pth"

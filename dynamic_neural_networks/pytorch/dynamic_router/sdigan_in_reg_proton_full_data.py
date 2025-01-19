@@ -97,10 +97,8 @@ for _ in range(N_RUNS):
     print("std max", std.max(), "min", std.min())
 
     # Intensity regularization
-    scaler_intensity = MinMaxScaler()
     intensity = data_cond["proton_photon_sum"].values.reshape(-1, 1)
     intensity = np.float32(intensity)
-    intensity = scaler_intensity.fit_transform(intensity)
     print("intensity max", intensity.max(), "min", intensity.min())
 
     # Auxiliary regressor
@@ -184,9 +182,7 @@ for _ in range(N_RUNS):
 
         intensity_loss, mean_intenisties, std_intensity, mean_intensity = intensity_regularization(fake_images,
                                                                                                    intensity,
-                                                                                                   scaler_intensity,
-                                                                                                   gene.in_strength,
-                                                                                                   device)
+                                                                                                   gene.in_strength)
         gen_loss = gen_loss + div_loss + intensity_loss
 
         # Train auxiliary regressor
