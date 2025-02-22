@@ -61,8 +61,8 @@ LR_R = 1e-3
 ED_STRENGTH = 0 #0.01  # Strength on the expert distribution loss in the router loss calculation
 GEN_STRENGTH = 1e-1  # Strength on the generator loss in the router loss calculation
 DIFF_STRENGTH = 1e-5  # Differentation on the generator loss in the router loss calculation
-UTIL_STRENGTH = 0  # Strength on the expert utilization entropy in the router loss calculation
-ALB_STRENGTH = 1e-4  # Strength on the adaptive load balancing in the router loss calculation
+UTIL_STRENGTH = 1e-4  # Strength on the expert utilization entropy in the router loss calculation
+ALB_STRENGTH = 0 #1e-4  # Strength on the adaptive load balancing in the router loss calculation
 STOP_ROUTER_TRAINING_EPOCH = EPOCHS
 CLIP_DIFF_LOSS = "No-clip" #-1.0
 
@@ -72,6 +72,10 @@ DATA_COND_PATH = "/net/tscratch/people/plgpbedkowski/data/data_cond_photonsum_pr
 DATA_POSITIONS_PATH = "/net/tscratch/people/plgpbedkowski/data/data_coord_proton_photonsum_proton_1_2312.pkl"
 INPUT_IMAGE_SHAPE = (56, 30)
 MIN_PROTON_THRESHOLD = 5
+
+CHECKPOINT_DATA_INDICES_FILE = None
+CHECKPOINT_RUN_MODELS = None  #"/net/tscratch/people/plgpbedkowski/dynamic_neural_networks/experiments/experiments/test_adaptive_load_balancing_0.0001_0_0.1_0_0.0001_1e-05_0.001_21_02_2025_16_27_09_5_2312_21_02_2025_16_27_09/models"
+epoch_to_load = None  #149
 
 NAME = f"test_continue_adaptive_load_balancing_{ALB_STRENGTH}_{ED_STRENGTH}_{GEN_STRENGTH}_{UTIL_STRENGTH}"
 # NAME = f"no_entropy_min_{MIN_PROTON_THRESHOLD}_ijcai2025_proton_{ED_STRENGTH}_{GEN_STRENGTH}_{UTIL_STRENGTH}"
@@ -108,7 +112,8 @@ for _ in range(N_RUNS):
         data_posi,
         EXPERIMENT_DIR_NAME,
         ZDCType.PROTON,
-        SAVE_EXPERIMENT_DATA)
+        SAVE_EXPERIMENT_DATA,
+        checkpoint_data_load_file=CHECKPOINT_DATA_INDICES_FILE)
 
     # CALCULATE DISTRIBUTION OF CHANNELS IN ORIGINAL TEST DATA #
     org = np.exp(x_test) - 1
@@ -125,22 +130,20 @@ for _ in range(N_RUNS):
                                                                            LR_A, DI_STRENGTH, IN_STRENGTH, device)
     router_network, router_optimizer = setup_router(N_COND, N_EXPERTS, LR_R, device)
 
-    saved_run_data = "/net/tscratch/people/plgpbedkowski/dynamic_neural_networks/experiments/experiments/test_adaptive_load_balancing_0.0001_0_0.1_0_0.0001_1e-05_0.001_21_02_2025_16_27_09_5_2312_21_02_2025_16_27_09/models"
-    epoch_to_load = 149
-    # Load weights
-    load_checkpoint_weights(
-        saved_run_data,
-        epoch_to_load,
-        generators,
-        generator_optimizers,
-        discriminators,
-        discriminator_optimizers,
-        aux_regs,
-        aux_reg_optimizers,
-        router_network,
-        router_optimizer,
-        device=device
-    )
+    if CHECKPOINT_RUN_MODELS:
+        load_checkpoint_weights(
+            CHECKPOINT_RUN_MODELS,
+            epoch_to_load,
+            generators,
+            generator_optimizers,
+            discriminators,
+            discriminator_optimizers,
+            aux_regs,
+            aux_reg_optimizers,
+            router_network,
+            router_optimizer,
+            device=device
+        )
 
     def generator_train_step(generator, discriminator, a_reg, cond, g_optimizer, a_optimizer, criterion,
                              true_positions, std, intensity, class_counts, BATCH_SIZE):

@@ -6,8 +6,13 @@ import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 
-from utils import (sum_channels_parallel, create_dir, save_scales)
+from utils import (create_dir, save_scales, save_train_test_indices, load_train_test_indices,
+                   TRAIN_TEST_INDICES_FILENAME)
 from enum import Enum
+
+SCRATCH_PATH = "/net/tscratch/people/plgpbedkowski/dynamic_neural_networks/"
+DIR_INFO = "{SCRATCH_PATH}/{EXPERIMENT_DIR_NAME}/info/"  # dir for storing scales and indices of samples
+DIR_MODELS = "{SCRATCH_PATH}/{EXPERIMENT_DIR_NAME}/models/"
 
 
 class ZDCType(Enum):
@@ -15,11 +20,14 @@ class ZDCType(Enum):
     NEUTRON = "neutron"
 
 
-def transform_data_for_training(data_cond, data, data_posi, EXPERIMENT_DIR_NAME, zdc_type:ZDCType = ZDCType.PROTON,
-                                SAVE_EXPERIMENT_DATA=True):
+def transform_data_for_training(data_cond, data, data_posi, EXPERIMENT_DIR_NAME, zdc_type: ZDCType = ZDCType.PROTON,
+                                SAVE_EXPERIMENT_DATA = True, checkpoint_data_load_file: str = None):
     """
 
     """
+    dir_info = DIR_INFO.format(SCRATCH_PATH=SCRATCH_PATH, EXPERIMENT_DIR_NAME=EXPERIMENT_DIR_NAME)
+    dir_models = DIR_MODELS.format(SCRATCH_PATH=SCRATCH_PATH, EXPERIMENT_DIR_NAME=EXPERIMENT_DIR_NAME)
+
     # GROUP CONDITIONAL DATA
     data_cond["cond"] = data_cond["Energy"].astype(str) + "|" + data_cond["Vx"].astype(str) + "|" + data_cond[
         "Vy"].astype(str) + "|" + data_cond["Vz"].astype(str) + "|" + data_cond["Px"].astype(str) + "|" + data_cond[
@@ -30,6 +38,7 @@ def transform_data_for_training(data_cond, data, data_posi, EXPERIMENT_DIR_NAME,
     ids = ids["index_y"]
 
     data = np.log(data + 1).astype(np.float32)
+    indices = np.arange(len(data))
     data_2 = data[ids]
     data_cond = data_cond.drop(columns="cond")
 
@@ -75,39 +84,58 @@ def transform_data_for_training(data_cond, data, data_posi, EXPERIMENT_DIR_NAME,
     scaler_cond = StandardScaler()
     data_cond = scaler_cond.fit_transform(data_cond.astype(np.float32))
 
+    ### Return data for training based on the saved indices ###
+    if checkpoint_data_load_file is not None:
+        train_indices, test_indices = load_train_test_indices(checkpoint_data_load_file)
+        x_train, x_test, x_train_2, x_test_2, y_train, y_test, std_train, std_test, \
+        intensity_train, intensity_test, positions_train, positions_test, \
+        expert_number_train, expert_number_test = data[train_indices], data[test_indices], \
+                                                  data_2[train_indices], data_2[test_indices], \
+                                                  data_cond[train_indices], data_cond[test_indices], \
+                                                  std[train_indices], std[test_indices],\
+                                                  intensity[train_indices], intensity[test_indices], \
+                                                  data_xy[train_indices], data_xy[test_indices], \
+                                                  expert_number[train_indices], expert_number[test_indices]
+
+        return x_train, x_test, x_train_2, x_test_2, y_train, y_test, std_train, std_test, \
+        intensity_train, intensity_test, positions_train, positions_test, \
+        expert_number_train, expert_number_test, scaler_poz, data_cond_names, dir_models
+
+    ### Divide the data into the TRAIN and TEST ###
     if zdc_type == ZDCType.PROTON:
-        x_train, x_test, x_train_2, x_test_2, y_train, y_test, std_train, \
-        std_test, intensity_train, intensity_test, positions_train, positions_test, \
-        expert_number_train, expert_number_test = train_test_split(
-            data, data_2, data_cond, std, intensity, data_xy, expert_number.values, test_size=0.2, shuffle=True)
+        x_train, x_test, x_train_2, x_test_2, y_train, y_test, std_train, std_test, \
+        intensity_train, intensity_test, positions_train, positions_test, \
+        expert_number_train, expert_number_test, train_indices, test_indices = train_test_split(
+            data, data_2, data_cond, std, intensity, data_xy, expert_number.values, indices,
+            test_size=0.2, shuffle=True)
 
-        print("Data shapes:", x_train.shape, x_test.shape,
-              y_train.shape, y_test.shape,
-              expert_number_train.shape, expert_number_test.shape)
-
+        print("Data shapes:", x_train.shape, x_test.shape, y_train.shape, y_test.shape)
     elif zdc_type == ZDCType.NEUTRON:
-        x_train, x_test, x_train_2, x_test_2, y_train, y_test, std_train, \
-        std_test, intensity_train, intensity_test, positions_train, positions_test = train_test_split(
-            data, data_2, data_cond, std, intensity, data_xy, test_size=0.2, shuffle=True)
+        x_train, x_test, x_train_2, x_test_2, y_train, y_test, std_train, std_test, \
+        intensity_train, intensity_test, positions_train, positions_test, \
+        expert_number_train, expert_number_test, train_indices, test_indices = train_test_split(
+            data, data_2, data_cond, std, intensity, data_xy, expert_number, indices,
+            test_size=0.2, shuffle=True)
 
-        print("Data shapes:", x_train.shape, x_test.shape,
-              y_train.shape, y_test.shape)
+        print("Data shapes:", x_train.shape, x_test.shape, y_train.shape, y_test.shape)
+    else:
+        raise ValueError("Unsupported ZDC type!")
 
-    SCRATCH_PATH = "/net/tscratch/people/plgpbedkowski/dynamic_neural_networks/experiments"
     # Save scales
     if SAVE_EXPERIMENT_DATA:
-        filepath = f"{SCRATCH_PATH}/{EXPERIMENT_DIR_NAME}/scales/"
-        create_dir(filepath, SAVE_EXPERIMENT_DATA)
-        save_scales(f"{zdc_type.value}", scaler_cond.mean_, scaler_cond.scale_, filepath)
-        filepath_models = f"{SCRATCH_PATH}/{EXPERIMENT_DIR_NAME}/models/"
-        create_dir(filepath_models, SAVE_EXPERIMENT_DATA)
+        create_dir(dir_info, SAVE_EXPERIMENT_DATA)
+        save_scales(f"{zdc_type.value}", scaler_cond.mean_, scaler_cond.scale_, dir_info)
+        create_dir(dir_models, SAVE_EXPERIMENT_DATA)
+
+        # Save only the indices
+        save_train_test_indices(dir_info, train_indices=train_indices, test_indices=test_indices)
+    else:
+        dir_models = None
 
     if zdc_type == ZDCType.NEUTRON:
         return x_train, x_test, x_train_2, x_test_2, y_train, y_test, std_train, std_test, \
-               intensity_train, intensity_test, positions_train, positions_test, scaler_poz, data_cond_names, filepath_models
+               intensity_train, intensity_test, positions_train, positions_test, scaler_poz, data_cond_names, dir_models
     elif zdc_type == ZDCType.PROTON:
         return x_train, x_test, x_train_2, x_test_2, y_train, y_test, std_train, std_test, \
                intensity_train, intensity_test, positions_train, positions_test, expert_number_train, \
-               expert_number_test, scaler_poz, data_cond_names, filepath_models
-
-
+               expert_number_test, scaler_poz, data_cond_names, dir_models

@@ -12,6 +12,8 @@ from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 import seaborn as sns
 
+TRAIN_TEST_INDICES_FILENAME = "train_test_indices.npz"
+
 
 def get_channel_masks(input_array: np.ndarray):
     """
@@ -129,6 +131,22 @@ def save_scales(model_name, scaler_means, scaler_scales, filepath):
 
     with open(filepath+out_fnm, mode="w") as f:
         f.write(res)
+
+
+def save_train_test_indices(filepath_dir: str, train_indices: np.array, test_indices: np.array):
+    filepath = os.path.join(filepath_dir, TRAIN_TEST_INDICES_FILENAME)
+    np.savez(filepath, train_indices=train_indices, test_indices=test_indices)
+    print("Data train-test-split indices saved to", filepath)
+
+
+def load_train_test_indices(checkpoint_data_load_file: str):
+    try:
+        data_indices = np.load(checkpoint_data_load_file)
+        print("Data train-test-split indices loaded!")
+        return data_indices["train_indices"], data_indices["test_indices"]
+    except FileNotFoundError:
+        print("No data train-test-split indices found!")
+        raise FileNotFoundError
 
 
 def calculate_joint_ws_across_experts(n_calc, x_tests: List, y_tests: List, generators: List,
