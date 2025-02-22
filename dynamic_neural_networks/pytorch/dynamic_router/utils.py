@@ -184,14 +184,17 @@ def calculate_joint_ws_across_experts(n_calc, x_tests: List, y_tests: List, gene
                     ch_org_expert[exp_idx][:, i], ch_gen_expert[exp_idx][:, i]
                 )
     # Calculate the mean WS distances across runs
+    print("WS SHAPE", ws.shape)
+    print("WS", ws)
     ws_runs = ws.mean(axis=1)  # calculate mean of the all channels. WS for n_calc (n_calc, 1)
     ws_mean, ws_std = ws_runs.mean(), ws_runs.std()
 
     ws_exp_runs = ws_exp.mean(axis=2)  # (n_calc, n_experts, 1)
     ws_mean_exp = ws_exp_runs.mean(axis=0)  # calculate mean for each expert
+    ws_std_exp = ws_exp_runs.std(axis=0)  # calculate std for each expert
     print("ws mean", f'{ws_mean:.2f}', end=" ")
 
-    return ws_mean, ws_std, ws_mean_exp
+    return ws_mean, ws_std, ws_mean_exp, ws_std_exp
 
 
 def get_predictions_from_generator_results(batch_size, num_samples, noise_dim,
@@ -221,9 +224,9 @@ def get_predictions_from_generator_results(batch_size, num_samples, noise_dim,
 
 
 def get_predictions_from_experts_results(num_samples, noise_dim,
-                                         device, y_test, router_network, experts):
+                                         device, y_test, router_network, experts, shape_images=(56, 30)):
     y_test_tensor = torch.tensor(y_test, device=device)
-    results_all = np.zeros((num_samples, 56, 30))
+    results_all = np.zeros((num_samples, *shape_images))
 
     with torch.no_grad():
         router_network.eval()
@@ -256,9 +259,9 @@ def get_predictions_from_experts_results(num_samples, noise_dim,
     results_1 = np.exp(results_1) - 1 # 40
     results_2 = np.exp(results_2) - 1 # 40
 
-    results_all[indx_0] = results_0.reshape(-1, 56, 30)
-    results_all[indx_1] = results_1.reshape(-1, 56, 30)
-    results_all[indx_2] = results_2.reshape(-1, 56, 30)
+    results_all[indx_0] = results_0.reshape(-1, *shape_images)
+    results_all[indx_1] = results_1.reshape(-1, *shape_images)
+    results_all[indx_2] = results_2.reshape(-1, *shape_images)
     return results_all
 
 
@@ -358,8 +361,11 @@ def intensity_regularization(gen_im_proton, intensity_proton, IN_STRENGTH):
     """
 
     # Sum the intensities in the generated images
-    # gen_im_proton_rescaled = torch.exp(gen_im_proton.clone().detach()) - 1 <- this fixed previous bad optimization
+    # gen_im_proton_rescaled = torch.exp(gen_im_proton.clone().detach()) - 1 #<- this fixed previous bad optimization
     gen_im_proton_rescaled = torch.exp(gen_im_proton) - 1
+    # print("Gen shape from model", gen_im_proton_rescaled.shape)
+    # Gen shape from model torch.Size([138, 1, 56, 30])
+    # After sum: torch.Size([138, 1, 1, 1])
     sum_all_axes_p_rescaled = torch.sum(gen_im_proton_rescaled, dim=[2, 3], keepdim=True)  # Sum along all but batch dimension
     sum_all_axes_p_rescaled = sum_all_axes_p_rescaled.reshape(-1, 1)  # Scale and reshape back to (batch_size, 1)
 
@@ -410,6 +416,7 @@ def generate_and_save_images(model, epoch, noise, noise_cond, x_test,
         fig.colorbar(im, ax=axs[i // 6, i % 6])
 
     fig.tight_layout(rect=[0, 0, 1, 0.975])
+    plt.close(fig)
     return fig
 
 
@@ -585,4 +592,22 @@ def plot_expert_heatmap(y_test, indices_experts, epoch, data_cond_names, num_bin
     return fig
 
 
+def calculate_adaptive_load_balancing_loss(routing_scores, alb_strength=1e-2, eps=1e-6):
+    """
+    Computes an adaptive load balancing loss that penalizes experts with low routing scores.
 
+    Args:
+        routing_scores (torch.Tensor): A 1D tensor of shape (N_experts,) representing the sum
+                                       of the routing probabilities (i.e. the "routing score") for each expert over the batch.
+        alb_strength (float): A scalar that controls the strength of the load balancing loss.
+        eps (float): A small constant to avoid division by zero.
+
+    Returns:
+        torch.Tensor: A scalar tensor representing the adaptive load balancing loss.
+    """
+    # Compute a penalty for each expert: low routing scores result in a high penalty.
+    penalties = torch.exp(1.0 / (routing_scores + eps))
+
+    # Average the penalties over all experts.
+    loss = penalties.mean()
+    return loss*alb_strength

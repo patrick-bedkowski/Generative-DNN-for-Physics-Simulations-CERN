@@ -2,6 +2,10 @@ import torch.nn as nn
 import torch
 
 
+def count_model_parameters(model):
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+
 # Define the Generator model
 class Generator(nn.Module):
     def __init__(self, noise_dim, cond_dim, di_strength, in_strength):
@@ -242,18 +246,18 @@ class DiscriminatorNeutron(nn.Module):
             nn.MaxPool2d(kernel_size=(2, 2))
         )
         self.fc1 = nn.Sequential(
-            nn.Linear(9*12*12 + cond_dim, 128),
-            nn.BatchNorm1d(128),
+            nn.Linear(9 * 12 * 12 + cond_dim, 256),  # Increased from 128 to 256
+            nn.BatchNorm1d(256),
             nn.LeakyReLU(0.1, inplace=True),
             nn.Dropout(0.2)
         )
         self.fc2 = nn.Sequential(
-            nn.Linear(128, 64),
-            nn.BatchNorm1d(64),
+            nn.Linear(256, 128),  # Increased from 64 to 512
+            nn.BatchNorm1d(128),
             nn.LeakyReLU(0.1, inplace=True),
             nn.Dropout(0.2)
         )
-        self.fc3 = nn.Linear(64, 1)
+        self.fc3 = nn.Linear(128, 1)  # Adjusted for new fc2 output
         self.sigmoid = nn.Sigmoid()
 
     def forward(self, img, cond):

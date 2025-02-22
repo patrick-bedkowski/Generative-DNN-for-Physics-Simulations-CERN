@@ -218,57 +218,6 @@ def sdi_gan_regularization(fake_latent, fake_latent_2, noise, noise_2, std, DI_S
     return div_loss
 
 
-def intensity_regularization(gen_im_proton, intensity_proton, scaler_intensity, IN_STRENGTH):
-    """
-    Computes the intensity regularization loss for generated images, returning the loss, the sum of intensities per image,
-    and the mean and standard deviation of the intensity across the batch.
-
-    Args:
-        gen_im_proton (torch.Tensor): A tensor of generated images with shape [batch_size, channels, height, width].
-        intensity_proton (torch.Tensor): A tensor representing the target intensity values for the batch, with shape [batch_size].
-        scaler_intensity (object): A scaler object used to normalize the intensity values, typically an instance of a
-                                   scaler from `sklearn.preprocessing` (e.g., `StandardScaler`).
-        IN_STRENGTH (float): A scalar that controls the strength of the intensity regularization in the final loss.
-
-    Returns:
-        torch.Tensor: The intensity regularization loss, calculated as the Mean Absolute Error (MAE) between the scaled
-                      sum of the intensities in the generated images and the target intensities, multiplied by `IN_STRENGTH`.
-        torch.Tensor: The sum of intensities in each generated image, with shape [n_samples, 1].
-        torch.Tensor: The standard deviation of the scaled intensity values across the batch.
-        torch.Tensor: The mean of the scaled intensity values across the batch.
-    """
-
-    # Sum the intensities in the generated images
-    sum_all_axes_p = torch.sum(gen_im_proton, dim=[2, 3], keepdim=True)  # Sum along all but batch dimension
-    sum_all_axes_p = sum_all_axes_p.reshape(-1, 1)  # Scale and reshape back to (batch_size, 1)
-
-    # Sum the intensities in the generated images
-    gen_im_proton_rescaled = torch.exp(gen_im_proton.clone().detach()) - 1
-    sum_all_axes_p_rescaled = torch.sum(gen_im_proton_rescaled, dim=[2, 3], keepdim=True)  # Sum along all but batch dimension
-    sum_all_axes_p_rescaled = sum_all_axes_p_rescaled.reshape(-1, 1)  # Scale and reshape back to (batch_size, 1)
-
-    # Compute mean and std as PyTorch tensors
-    std_intensity_scaled = sum_all_axes_p_rescaled.std()
-    mean_intensity_scaled = sum_all_axes_p_rescaled.mean()
-    # remove the log from the predictions
-    # print(sum_all_axes_p_rescaled)
-    # print(mean_intensity_scaled)
-
-    # DELETED THE SCALING
-
-    # Manually scale using the parameters from the fitted MinMaxScaler
-    # data_min = torch.tensor(scaler_intensity.data_min_, device=gen_im_proton.device, dtype=torch.float32)
-    # data_max = torch.tensor(scaler_intensity.data_max_, device=gen_im_proton.device, dtype=torch.float32)
-    #
-    # sum_all_axes_p_scaled = (sum_all_axes_p - data_min) / (data_max - data_min)
-    # Ensure intensity_proton is correctly shaped and on the same device
-    intensity_proton = intensity_proton.view(-1, 1).to(gen_im_proton.device)  # Ensure it is of shape [batch_size, 1]
-
-    # Calculate MAE loss
-    mae_value_p = F.l1_loss(sum_all_axes_p, intensity_proton)
-    return IN_STRENGTH * mae_value_p, sum_all_axes_p, std_intensity_scaled.detach(), mean_intensity_scaled.detach()
-
-
 def generate_and_save_images(model, epoch, noise, noise_cond, x_test,
                              photon_sum_proton_min, photon_sum_proton_max,
                              device, random_generator, shape_images=(56, 30)):
@@ -377,19 +326,26 @@ class StratifiedBatchSampler:
         return len(self.y)
 
 
-def save_models(filepath_models, n_experts, aux_regs, generators, discriminators, router_network, epoch):
+def save_models(filepath_models, n_experts, aux_regs, aux_reg_optimizers,
+                generators, generator_optimizers, discriminators, discriminator_optimizers,
+                router_network, router_optimizer, epoch):
     try:
         for i in range(n_experts):
             torch.save(generators[i].state_dict(),
-                       os.path.join(filepath_models, "gen_" + str(i) + "_" + str(epoch) + ".h5"))
+                       os.path.join(filepath_models, "gen_" + str(i) + "_" + str(epoch) + ".pth"))
+            torch.save(generator_optimizers[i].state_dict(),
+                       os.path.join(filepath_models, "gen_optim_" + str(i) + "_" + str(epoch) + ".pth"))
             torch.save(discriminators[i].state_dict(),
-                       os.path.join(filepath_models, "disc_" + str(i) + "_" + str(epoch) + ".h5"))
+                       os.path.join(filepath_models, "disc_" + str(i) + "_" + str(epoch) + ".pth"))
+            torch.save(discriminator_optimizers[i].state_dict(),
+                       os.path.join(filepath_models, "disc_optim_" + str(i) + "_" + str(epoch) + ".pth"))
             torch.save(aux_regs[i].state_dict(), os.path.join(filepath_models,
-                                                              "aux_reg_" + str(i) + "_" + str(epoch) + ".h5"))
+                                                              "aux_reg_" + str(i) + "_" + str(epoch) + ".pth"))
+            torch.save(aux_reg_optimizers[i].state_dict(),
+                       os.path.join(filepath_models, "aux_reg_optim_" + str(i) + "_" + str(epoch) + ".pth"))
 
         # save router
-        router_filename = f"router_network_epoch_{str(epoch)}.pth"
-        filepath_router = os.path.join(filepath_models, router_filename)
-        torch.save(router_network.state_dict(), filepath_router)
+        torch.save(router_network.state_dict(), os.path.join(filepath_models, f"router_network_{str(epoch)}.pth"))
+        torch.save(router_optimizer.state_dict(), os.path.join(filepath_models, f"router_network_optim_{str(epoch)}.pth"))
     except Exception as e:
         print(f"Error saving models: {e}")
