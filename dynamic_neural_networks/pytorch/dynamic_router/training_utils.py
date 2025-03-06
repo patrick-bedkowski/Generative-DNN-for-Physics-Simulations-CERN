@@ -349,3 +349,28 @@ def save_models(filepath_models, n_experts, aux_regs, aux_reg_optimizers,
         torch.save(router_optimizer.state_dict(), os.path.join(filepath_models, f"router_network_optim_{str(epoch)}.pth"))
     except Exception as e:
         print(f"Error saving models: {e}")
+
+
+def save_models_and_architectures(filepath_models, n_experts, aux_regs, aux_reg_optimizers,
+                                  generators, generator_optimizers, discriminators, discriminator_optimizers,
+                                  router_network, router_optimizer, epoch):
+    try:
+        for i in range(n_experts):
+            torch.save(generators[i],
+                       os.path.join(filepath_models, "gen_" + str(i) + "_" + str(epoch) + ".pth"))
+            torch.save(generator_optimizers[i].state_dict(),
+                       os.path.join(filepath_models, "gen_optim_" + str(i) + "_" + str(epoch) + ".pth"))
+            torch.save(discriminators[i],
+                       os.path.join(filepath_models, "disc_" + str(i) + "_" + str(epoch) + ".pth"))
+            torch.save(discriminator_optimizers[i].state_dict(),
+                       os.path.join(filepath_models, "disc_optim_" + str(i) + "_" + str(epoch) + ".pth"))
+            torch.save(aux_regs[i], os.path.join(filepath_models,
+                                                              "aux_reg_" + str(i) + "_" + str(epoch) + ".pth"))
+            torch.save(aux_reg_optimizers[i].state_dict(),
+                       os.path.join(filepath_models, "aux_reg_optim_" + str(i) + "_" + str(epoch) + ".pth"))
+
+        # save router
+        torch.save(router_network, os.path.join(filepath_models, f"router_network_{str(epoch)}.pth"))
+        torch.save(router_optimizer.state_dict(), os.path.join(filepath_models, f"router_network_optim_{str(epoch)}.pth"))
+    except Exception as e:
+        print(f"Error saving models: {e}")

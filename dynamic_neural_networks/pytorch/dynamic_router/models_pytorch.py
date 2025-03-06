@@ -1,5 +1,6 @@
-import torch.nn as nn
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
 
 def count_model_parameters(model):
@@ -290,6 +291,56 @@ class RouterNetwork(nn.Module):
 
     def forward(self, cond):
         return self.fc_layers(cond)
+
+
+class AttentionRouterNetwork(nn.Module):
+    def __init__(self, cond_dim, num_experts, num_heads=4, hidden_dim=128):
+        """
+        cond_dim : dimensionality of the input condition vector.
+        num_experts: number of generator/discriminator experts.
+        num_heads : number of heads for the multi-head attention.
+        hidden_dim : latent dimension to which conditions are projected.
+        """
+        super(AttentionRouterNetwork, self).__init__()
+        self.cond_dim = cond_dim
+        self.name = "AttentionRouterNetwork"
+        self.num_experts = num_experts
+        self.hidden_dim = hidden_dim
+        # Optionally project the condition vector into a hidden representation.
+        self.query_proj = nn.Linear(cond_dim, hidden_dim)
+
+        # Self-attention module (using batch_first = True so inputs are (B, S, D))
+        self.attention = nn.MultiheadAttention(embed_dim=hidden_dim, num_heads=num_heads, batch_first=True)
+
+        # Expert keys: a learnable bank of expert embeddings (one per expert)
+        self.expert_keys = nn.Parameter(torch.randn(num_experts, hidden_dim))
+
+        # A learnable temperature parameter to adjust the sharpness of the routing distribution.
+        self.temperature = nn.Parameter(torch.tensor(1.0))
+
+    def forward(self, cond):
+        # Input: cond of shape (batch_size, cond_dim)
+        # Project the condition to get a query representation
+        query = self.query_proj(cond)  # shape: (B, hidden_dim)
+
+        # Unsqueeze to add a sequence length (here, we'll use 1, treating each input as a sequence of length 1)
+        query_seq = query.unsqueeze(1)  # shape: (B, 1, hidden_dim)
+
+        # Apply self-attention.
+        # Since our sequence length is 1, we simply get back a representation of shape (B, 1, hidden_dim)
+        attn_output, _ = self.attention(query_seq, query_seq, query_seq)
+        attn_output = attn_output.squeeze(1)  # shape: (B, hidden_dim)
+
+        # Compute dot-product scores with each expert's key.
+        # This yields a tensor of shape (B, num_experts)
+        logits = torch.matmul(attn_output, self.expert_keys.T)
+
+        # Scale the logits by the temperature to adjust their sharpness.
+        logits = logits / self.temperature
+
+        # Apply softmax to obtain routing probabilities
+        routing_probs = F.softmax(logits, dim=-1)
+        return routing_probs
 
 
 # # Define the Router Network

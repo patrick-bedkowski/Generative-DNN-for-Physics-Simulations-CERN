@@ -11,6 +11,8 @@ from sklearn.model_selection import StratifiedKFold
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 import seaborn as sns
+from scipy import stats
+
 
 TRAIN_TEST_INDICES_FILENAME = "train_test_indices.npz"
 
@@ -139,8 +141,9 @@ def save_train_test_indices(filepath_dir: str, train_indices: np.array, test_ind
     print("Data train-test-split indices saved to", filepath)
 
 
-def load_train_test_indices(checkpoint_data_load_file: str):
+def load_train_test_indices(checkpoint_data_filepath_dir: str):
     try:
+        checkpoint_data_load_file = os.path.join(checkpoint_data_filepath_dir, TRAIN_TEST_INDICES_FILENAME)
         data_indices = np.load(checkpoint_data_load_file)
         print("Data train-test-split indices loaded!")
         return data_indices["train_indices"], data_indices["test_indices"]
@@ -174,15 +177,18 @@ def calculate_joint_ws_across_experts(n_calc, x_tests: List, y_tests: List, gene
             if num_samples == 0:
                 ch_gen_expert.append(np.array([]))  # Append empty if no samples
                 continue
-
-            # Get predictions from generator
-            results_all = get_predictions_from_generator_results(
-                batch_size, num_samples, noise_dim,
-                device, y_test_temp, generators[generator_idx],
-                shape_images=shape_images
-            )
-            print(f"For generator {generator_idx}. Samples generated: {results_all.shape}, real_samples: {num_samples}")
-
+            try:
+                # Get predictions from generator
+                results_all = get_predictions_from_generator_results(
+                    batch_size, num_samples, noise_dim,
+                    device, y_test_temp, generators[generator_idx],
+                    shape_images=shape_images
+                )
+                print(f"For generator {generator_idx}. Samples generated: {results_all.shape}, real_samples: {num_samples}")
+            except:
+                print("gen IND", generator_idx)
+                print("y_tests", len(y_tests[generator_idx]))
+                print("num_samples", num_samples)
             # Sum channels and store results
             ch_gen_smaller = pd.DataFrame(sum_channels_parallel(results_all)).values
             ch_gen_expert.append(ch_gen_smaller.copy())  # Expert-specific data
@@ -558,7 +564,7 @@ def plot_cond_pca_tsne(y_test_temp, indices_experts, epoch):
     return fig
 
 
-def plot_expert_heatmap(y_test, indices_experts, epoch, data_cond_names, num_bins=10):
+def plot_expert_heatmap(y_test, indices_experts, epoch, data_cond_names, num_bins=50, save_path=None):
     """
     Create a heatmap showing the distribution of samples across bins (OX axis) and experts (OY axis) for all 9 variables.
 
@@ -604,9 +610,85 @@ def plot_expert_heatmap(y_test, indices_experts, epoch, data_cond_names, num_bin
         sns.heatmap(heatmap_data, annot=True, fmt="d", cmap="Blues", cbar=False, ax=ax)
         ax.set_title(f"{var_name}")
         ax.set_xlabel("Bins")
-        ax.set_ylabel("Experts)")
+        ax.set_ylabel("Experts")
 
     plt.tight_layout(rect=[0, 0, 1, 0.95])  # Adjust layout to fit the title
+
+    save_path = os.path.join(save_path, "cond_data_expert_specialization_2.png")
+    # Save the plot if a save path is provided
+    plt.tight_layout()
+    if save_path:
+        plt.savefig(save_path)
+    return fig
+
+
+def plot_expert_specialization(y_test, indices_experts, epoch, data_cond_names, save_path=None):
+    y_test_np = y_test.cpu().numpy() if isinstance(y_test, torch.Tensor) else y_test
+
+    num_points_kde = 100
+
+    num_variables = y_test_np.shape[1]
+    if num_variables != len(data_cond_names):
+        raise ValueError(f"y_test must have exactly {len(data_cond_names)} variables")
+
+    fig, axes = plt.subplots(3, 3, figsize=(18, 12))
+    fig.suptitle(f"Expert Specialization on Input Data- Epoch {epoch}", fontsize=16)
+
+    colors = ['steelblue', 'darkorange', 'forestgreen']  # Define colors
+    expert_labels = [f"Expert {i+1}" for i in range(len(indices_experts))]
+
+    for var_idx, var_name in enumerate(data_cond_names):
+        ax = axes[var_idx // 3, var_idx % 3]
+
+        if var_idx == len(data_cond_names) - 1:  # Categorical variable (stacked bar plot)
+            categorical_variable = y_test_np[:, var_idx]
+            unique_values = np.unique(categorical_variable)
+
+            # Prepare data for the grouped bar plot
+            data = []
+            for expert_idx, indices in enumerate(indices_experts):
+                expert_data = categorical_variable[indices]
+                counts = pd.Series(expert_data).value_counts()
+                # Ensure all unique values are represented, filling missing values with 0
+                expert_counts = [counts.get(val, 0) for val in unique_values]
+                data.append(expert_counts)
+
+            # Set the positions and width for the bars
+            x = np.arange(len(unique_values))  # the label locations
+            width = 0.2  # the width of the bars
+
+            # Plot the grouped bar plot with specified colors
+            for i, expert_data in enumerate(data):
+                ax.bar(x + (i - 1) * width, expert_data, width, label=expert_labels[i], color=colors[i])
+
+            # Add some text for labels, title and custom x-axis tick labels, etc.
+            ax.set_title(f"{var_name} (Categorical)")
+            ax.set_xlabel("Category")
+            ax.set_ylabel("Count (Log Scale)")  # Update y-axis label
+            ax.set_yscale('log')  # Set y-axis to log scale
+            ax.set_xticks(x)
+            ax.set_xticklabels(unique_values)
+            ax.legend(loc='upper right', fontsize='x-small')
+        else:  # Continuous variables (KDE plots)
+            continuous_variable = y_test_np[:, var_idx]
+            x_range = np.linspace(continuous_variable.min(), continuous_variable.max(), num_points_kde)
+
+            for expert_idx, indices in enumerate(indices_experts):
+                expert_data = continuous_variable[indices]
+                kde = stats.gaussian_kde(expert_data)
+                y = kde(x_range)
+                ax.plot(x_range, y, label=f"Expert {expert_idx + 1}")
+
+            ax.set_title(f"{var_name}")
+            ax.set_xlabel("Value")
+            ax.set_ylabel("Density")
+            ax.legend(loc='upper right', fontsize='x-small')
+
+    save_path = os.path.join(save_path, "expert_spec_cond_data.png")
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    if save_path:
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        plt.savefig(save_path)
     return fig
 
 

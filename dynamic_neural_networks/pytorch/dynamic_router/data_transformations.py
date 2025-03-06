@@ -11,8 +11,8 @@ from utils import (create_dir, save_scales, save_train_test_indices, load_train_
 from enum import Enum
 
 SCRATCH_PATH = "/net/tscratch/people/plgpbedkowski/dynamic_neural_networks/"
-DIR_INFO = "{SCRATCH_PATH}/{EXPERIMENT_DIR_NAME}/info/"  # dir for storing scales and indices of samples
-DIR_MODELS = "{SCRATCH_PATH}/{EXPERIMENT_DIR_NAME}/models/"
+DIR_INFO = "{EXPERIMENT_DIR_NAME}/info/"  # dir for storing scales and indices of samples
+DIR_MODELS = "{EXPERIMENT_DIR_NAME}/models/"
 
 
 class ZDCType(Enum):
@@ -21,12 +21,9 @@ class ZDCType(Enum):
 
 
 def transform_data_for_training(data_cond, data, data_posi, EXPERIMENT_DIR_NAME, zdc_type: ZDCType = ZDCType.PROTON,
-                                SAVE_EXPERIMENT_DATA = True, checkpoint_data_load_file: str = None):
-    """
-
-    """
-    dir_info = DIR_INFO.format(SCRATCH_PATH=SCRATCH_PATH, EXPERIMENT_DIR_NAME=EXPERIMENT_DIR_NAME)
-    dir_models = DIR_MODELS.format(SCRATCH_PATH=SCRATCH_PATH, EXPERIMENT_DIR_NAME=EXPERIMENT_DIR_NAME)
+                                SAVE_EXPERIMENT_DATA = True, load_data_file_from_checkpoint: bool = False):
+    dir_info = DIR_INFO.format(EXPERIMENT_DIR_NAME=EXPERIMENT_DIR_NAME)
+    dir_models = DIR_MODELS.format(EXPERIMENT_DIR_NAME=EXPERIMENT_DIR_NAME)
 
     # GROUP CONDITIONAL DATA
     data_cond["cond"] = data_cond["Energy"].astype(str) + "|" + data_cond["Vx"].astype(str) + "|" + data_cond[
@@ -85,8 +82,8 @@ def transform_data_for_training(data_cond, data, data_posi, EXPERIMENT_DIR_NAME,
     data_cond = scaler_cond.fit_transform(data_cond.astype(np.float32))
 
     ### Return data for training based on the saved indices ###
-    if checkpoint_data_load_file is not None:
-        train_indices, test_indices = load_train_test_indices(checkpoint_data_load_file)
+    if load_data_file_from_checkpoint:
+        train_indices, test_indices = load_train_test_indices(dir_info)
         x_train, x_test, x_train_2, x_test_2, y_train, y_test, std_train, std_test, \
         intensity_train, intensity_test, positions_train, positions_test, \
         expert_number_train, expert_number_test = data[train_indices], data[test_indices], \

@@ -1,5 +1,6 @@
 from models_pytorch import Generator, Discriminator, RouterNetwork, AuxReg,\
-    GeneratorNeutron, DiscriminatorNeutron, AuxRegNeutron, count_model_parameters
+    GeneratorNeutron, DiscriminatorNeutron, AuxRegNeutron, count_model_parameters,\
+    AttentionRouterNetwork
 
 import torch
 import torch.optim as optim
@@ -89,7 +90,23 @@ def setup_experts_neutron(N_EXPERTS, N_COND, NOISE_DIM, LR_G, LR_D, LR_A, DI_STR
     return generators, generator_optimizers, discriminators, discriminator_optimizers, aux_regs, aux_reg_optimizers
 
 
-def setup_router(N_COND, N_EXPERTS, LR_R, device=torch.device("cuda:0")):
+def setup_router_attention(cond_dim, n_experts, num_heads, hidden_dim, lr_r, device=torch.device("cuda:0")):
+    router_network = AttentionRouterNetwork(cond_dim=cond_dim, num_experts=n_experts, num_heads=num_heads,
+                                            hidden_dim=hidden_dim)
+    # load previous weights
+    # expert_weights = f"/net/tscratch/people/plgpbedkowski/data/weights/router_network_epoch_80.pth"
+    # print(f'weights loaded for ROUTER')
+    # router_network.load_state_dict(torch.load(expert_weights, map_location='cpu'))
+    router_network = router_network.to(device)
+    router_optimizer = optim.Adam(router_network.parameters(), lr=lr_r)
+    num_params = count_model_parameters(router_network)
+    print(f"Router model has {num_params} trainable parameters.")
+    # Define the learning rate scheduler
+    # router_scheduler = lr_scheduler.ReduceLROnPlateau(router_optimizer, mode='min', patience=3, factor=0.1, verbose=True)
+    return router_network, router_optimizer
+
+
+def setup_router(N_COND, N_EXPERTS, LR_R=1e-3, device=torch.device("cuda:0")):
     router_network = RouterNetwork(N_COND, N_EXPERTS)
     # load previous weights
     # expert_weights = f"/net/tscratch/people/plgpbedkowski/data/weights/router_network_epoch_80.pth"

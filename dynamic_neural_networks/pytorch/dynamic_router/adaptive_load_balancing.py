@@ -20,9 +20,9 @@ from utils import (sum_channels_parallel, calculate_ws_ch_proton_model,
                    regressor_loss, calculate_expert_utilization_entropy,
                    StratifiedBatchSampler, plot_cond_pca_tsne, plot_expert_heatmap,
                    calculate_adaptive_load_balancing_loss)
-from data_transformations import transform_data_for_training, ZDCType
+from data_transformations import transform_data_for_training, ZDCType, SCRATCH_PATH
 from training_setup import setup_experts, setup_router, load_checkpoint_weights
-from training_utils import save_models
+from training_utils import save_models_and_architectures
 
 
 print(torch.cuda.is_available())
@@ -40,7 +40,7 @@ SAVE_EXPERIMENT_DATA = True
 PLOT_IMAGES = True
 
 # SETTINGS & PARAMETERS
-WS_MEAN_SAVE_THRESHOLD = 4.25
+WS_MEAN_SAVE_THRESHOLD = 3.5
 DI_STRENGTH = 0.1
 IN_STRENGTH = 1e-3  #0.001
 IN_STRENGTH_LOWER_VAL = 0.001  # 0.000001
@@ -48,6 +48,8 @@ AUX_STRENGTH = 0.001
 
 N_RUNS = 1
 N_EXPERTS = 3
+# N_HEADS = 4
+# HIDDEN_DIM = 128
 BATCH_SIZE = 256
 NOISE_DIM = 10
 N_COND = 9  # number of conditional features
@@ -61,8 +63,8 @@ LR_R = 1e-3
 ED_STRENGTH = 0 #0.01  # Strength on the expert distribution loss in the router loss calculation
 GEN_STRENGTH = 1e-1  # Strength on the generator loss in the router loss calculation
 DIFF_STRENGTH = 1e-5  # Differentation on the generator loss in the router loss calculation
-UTIL_STRENGTH = 1e-4  # Strength on the expert utilization entropy in the router loss calculation
-ALB_STRENGTH = 0 #1e-4  # Strength on the adaptive load balancing in the router loss calculation
+UTIL_STRENGTH = 0  #  1e-4  # Strength on the expert utilization entropy in the router loss calculation
+ALB_STRENGTH = 1e-5  # 1e-3  #1e-4  # Strength on the adaptive load balancing in the router loss calculation
 STOP_ROUTER_TRAINING_EPOCH = EPOCHS
 CLIP_DIFF_LOSS = "No-clip" #-1.0
 
@@ -71,13 +73,13 @@ DATA_COND_PATH = "/net/tscratch/people/plgpbedkowski/data/data_cond_photonsum_pr
 # data of coordinates of maximum value of pixel on the images
 DATA_POSITIONS_PATH = "/net/tscratch/people/plgpbedkowski/data/data_coord_proton_photonsum_proton_1_2312.pkl"
 INPUT_IMAGE_SHAPE = (56, 30)
-MIN_PROTON_THRESHOLD = 5
+MIN_PROTON_THRESHOLD = 1
 
 CHECKPOINT_DATA_INDICES_FILE = None
 CHECKPOINT_RUN_MODELS = None  #"/net/tscratch/people/plgpbedkowski/dynamic_neural_networks/experiments/experiments/test_adaptive_load_balancing_0.0001_0_0.1_0_0.0001_1e-05_0.001_21_02_2025_16_27_09_5_2312_21_02_2025_16_27_09/models"
 epoch_to_load = None  #149
 
-NAME = f"test_continue_adaptive_load_balancing_{ALB_STRENGTH}_{ED_STRENGTH}_{GEN_STRENGTH}_{UTIL_STRENGTH}"
+NAME = f"test_attention_router_entropy_loss_{ALB_STRENGTH}_{ED_STRENGTH}_{GEN_STRENGTH}_{UTIL_STRENGTH}"
 # NAME = f"no_entropy_min_{MIN_PROTON_THRESHOLD}_ijcai2025_proton_{ED_STRENGTH}_{GEN_STRENGTH}_{UTIL_STRENGTH}"
 
 # NAME = f"diff_with_intensitiy_and_std_ijcai2025_proton_{ED_STRENGTH}_{GEN_STRENGTH}_{UTIL_STRENGTH}"
@@ -100,9 +102,10 @@ for _ in range(N_RUNS):
     photon_sum_proton_min, photon_sum_proton_max = data_cond.proton_photon_sum.min(), data_cond.proton_photon_sum.max()
     print('Loaded positions: ', data_posi.shape, "max:", data_posi.values.max(), "min:", data_posi.values.min())
 
-    DATE_STR = datetime.now().strftime("%d_%m_%Y_%H_%M_%S")
+    DATE_STR = datetime.now().strftime("%d_%m_%Y_%H_%M_%S_%f")[:-3]
     wandb_run_name = f"{NAME}_{LR_G}_{LR_D}_{LR_R}_{DATE_STR}"
     EXPERIMENT_DIR_NAME = f"experiments/{wandb_run_name}_{int(photon_sum_proton_min)}_{int(photon_sum_proton_max)}_{DATE_STR}"
+    EXPERIMENT_DIR_NAME = os.path.join(SCRATCH_PATH, EXPERIMENT_DIR_NAME)
 
     ### TRANSFORM DATA FOR TRAINING ###
     x_train, x_test, x_train_2, x_test_2, y_train, y_test, std_train, std_test, \
@@ -129,6 +132,7 @@ for _ in range(N_RUNS):
     discriminator_optimizers, aux_regs, aux_reg_optimizers = setup_experts(N_EXPERTS, N_COND, NOISE_DIM, LR_G, LR_D,
                                                                            LR_A, DI_STRENGTH, IN_STRENGTH, device)
     router_network, router_optimizer = setup_router(N_COND, N_EXPERTS, LR_R, device)
+    # router_network, router_optimizer = setup_router_attention(N_COND, N_EXPERTS, N_HEADS, HIDDEN_DIM, LR_R, device)
 
     if CHECKPOINT_RUN_MODELS:
         load_checkpoint_weights(
@@ -530,9 +534,10 @@ for _ in range(N_RUNS):
 
             # save models if all generators pass threshold
             if ws_mean < WS_MEAN_SAVE_THRESHOLD:
-                save_models(filepath_models, N_EXPERTS, aux_regs, aux_reg_optimizers,
-                            generators, generator_optimizers, discriminators, discriminator_optimizers,
-                            router_network, router_optimizer, epoch)
+                save_models_and_architectures(filepath_models, N_EXPERTS, aux_regs, aux_reg_optimizers,
+                                              generators, generator_optimizers, discriminators,
+                                              discriminator_optimizers,
+                                              router_network, router_optimizer, epoch)
 
             print(f'Time for epoch {epoch} is {epoch_time:.2f} sec')
 
@@ -548,6 +553,8 @@ for _ in range(N_RUNS):
         "generator_architecture": generators[0].name,
         "discriminator_architecture": discriminators[0].name,
         'stop_router_training_epoch': STOP_ROUTER_TRAINING_EPOCH,
+        # 'num_heads_router': N_HEADS,
+        # 'hidden_dim_router': HIDDEN_DIM,
         "diversity_strength": DI_STRENGTH,
         "intensity_strength": IN_STRENGTH,
         "intensity_strength_after_router_stops": IN_STRENGTH_LOWER_VAL,

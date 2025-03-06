@@ -70,113 +70,171 @@ plt.rcParams.update({
     'pgf.rcfonts': False,
 })
 
-def plot_proton_photonsum_histogreams_shared(data_0, data_1, data_2, save_path=None):
+import matplotlib.pyplot as plt
+import numpy as np
+
+
+def plot_proton_photonsum_histograms_shared(datasets, labels=None, save_path=None):
     """
-    Plots outlined stacked histograms for three datasets using step histograms.
+    Plots outlined stacked histograms for multiple datasets using step histograms.
 
     Parameters:
-    - data_0, data_1, data_2: Arrays or lists of data to plot.
+    - datasets: A list of arrays or lists of data to plot.
+    - labels: Optional list of labels for the datasets.
     - save_path: String path where the plot will be saved.
 
     Returns:
     - fig: The figure object containing the plot.
     """
+    if len(datasets) == 0:
+        raise ValueError("The datasets list must contain at least one dataset.")
+
+    # Verify that labels, if provided, match the number of datasets
+    if labels is not None and len(labels) != len(datasets):
+        raise ValueError("Number of labels must match the number of datasets.")
+
+    # Create the figure and axes
     fig, ax = plt.subplots(figsize=(10, 10))  # Adjust figsize as needed
 
-    # Define the bins
-    bins = np.linspace(min(np.min(data_0), np.min(data_1), np.min(data_2)),
-                       max(np.max(data_0), np.max(data_1), np.max(data_2)), 51)
+    # Define the bins based on the global min and max of all datasets
+    all_data = np.concatenate(datasets)
+    bins = np.linspace(np.min(all_data), np.max(all_data), 51)
 
-    # Compute the histogram values for each dataset
-    hist_0, _ = np.histogram(data_0, bins=bins)
-    hist_1, _ = np.histogram(data_1, bins=bins)
-    hist_2, _ = np.histogram(data_2, bins=bins)
-    # eps = 1e-8
-    # hist_0 = np.maximum(hist_0, eps)
-    # hist_1 = np.maximum(hist_1, eps)
-    # hist_2 = np.maximum(hist_2, eps)
-    #
+    # Iterate over datasets and plot each dataset
+    for i, data in enumerate(datasets):
+        # Normalize the histogram values
+        hist, _ = np.histogram(data, bins=bins)
+        hist_normalized = hist  #/ np.sum(data)  # Frequency normalized by dataset sum
 
-    # whole_len = len(data_0) + len(data_1) + len(data_2)
-    hist_0 = hist_0 / sum(data_0)
-    hist_1 = hist_1 / sum(data_1)
-    hist_2 = hist_2 / sum(data_2)
+        # Use the label if provided, otherwise fallback to a default label
+        label = labels[i] if labels is not None else f"Expert {i}"
 
-    # Optionally convert fraction to percentage
+        # Plot as a step histogram
+        ax.step(bins[:-1], hist_normalized, where='post', label=label)
 
-    # Plot step histograms
-    ax.step(bins[:-1], hist_0, where='post', color='blue', label='Expert 1')
-    ax.step(bins[:-1], hist_1, where='post', color='green', label='Expert 2')
-    ax.step(bins[:-1], hist_2, where='post', color='red', label='Expert 3')
-    # Set axis scales and labels
-    # Format y-axis ticks as percents
-    # ax.set_ylim([1e-4, 100])
-    ax.set_yscale('log')
-    # ax.set_yticks([1e-2, 1e-1, 1, 10, 80, 100])
-    # Define what label you want on each
-    # ax.set_yticklabels(['0.01%', '0.1%', '1%', '10%', '80%', '100%'])
+    # Set axis properties
+    ax.set_yscale('log')  # Use logarithmic scale for the y-axis
     ax.set_ylabel('Frequency')
-
-    # ax.set_xlim(201, 1900)
-    # ax.set_ylim(0, 0.01)
     ax.set_xlabel('Proton Photon Sum')
     ax.set_title('Distribution of mean of generated predictions from experts.')
     ax.legend()
 
-    # PErcentage of sampels
-    # hist_0, _ = np.histogram(data_0, bins=bins)
-    # hist_1, _ = np.histogram(data_1, bins=bins)
-    # hist_2, _ = np.histogram(data_2, bins=bins)
-    # # eps = 1e-8
-    # # hist_0 = np.maximum(hist_0, eps)
-    # # hist_1 = np.maximum(hist_1, eps)
-    # # hist_2 = np.maximum(hist_2, eps)
-    # #
-    # hist_0 *= 100
-    # hist_1 *= 100
-    # hist_2 *= 100
-    #
-    # # whole_len = len(data_0) + len(data_1) + len(data_2)
-    # hist_0 = hist_0 / len(data_0)
-    # hist_1 = hist_1 / len(data_1)
-    # hist_2 = hist_2 / len(data_2)
-    #
-    # # Optionally convert fraction to percentage
-    #
-    # # Plot step histograms
-    # ax.step(bins[:-1], hist_0, where='post', color='blue', label='Expert 1')
-    # ax.step(bins[:-1], hist_1, where='post', color='green', label='Expert 2')
-    # ax.step(bins[:-1], hist_2, where='post', color='red', label='Expert 3')
-    # # Set axis scales and labels
-    # # Format y-axis ticks as percents
-    # # ax.set_ylim([1e-4, 100])
-    # ax.set_yscale('log')
-    # ax.set_yticks([1e-2, 1e-1, 1, 10, 80, 100])
-    # # Define what label you want on each
-    # ax.set_yticklabels(['0.01%', '0.1%', '1%', '10%', '80%', '100%'])
-    # ax.set_ylabel('Percentage')
-    #
-    # # ax.set_xlim(201, 1900)
-    # # ax.set_ylim(0, 0.01)
-    # ax.set_xlabel('Proton Photon Sum')
-    # ax.set_title('Distribution of mean of generated predictions from experts.')
-    # ax.legend()
-
+    # Save the plot if a save path is provided
+    save_path = os.path.join(save_path, "proton_photonsum_histograms_shared.png")
     plt.tight_layout()
     if save_path:
         plt.savefig(save_path)
 
     return fig
 
+# save_path = os.path.join(save_path, "proton_photonsum_histograms_shared.png")
 
-def make_histograms(noise_cond, expert, ch_org, device, noise_dim=9, batch_size=64):
+# def plot_proton_photonsum_histograms_shared(data_0, data_1, data_2, save_path=None):
+#     """
+#     Plots outlined stacked histograms for three datasets using step histograms.
+#
+#     Parameters:
+#     - data_0, data_1, data_2: Arrays or lists of data to plot.
+#     - save_path: String path where the plot will be saved.
+#
+#     Returns:
+#     - fig: The figure object containing the plot.
+#     """
+#     fig, ax = plt.subplots(figsize=(10, 10))  # Adjust figsize as needed
+#
+#     # Define the bins
+#     bins = np.linspace(min(np.min(data_0), np.min(data_1), np.min(data_2)),
+#                        max(np.max(data_0), np.max(data_1), np.max(data_2)), 51)
+#
+#     # Compute the histogram values for each dataset
+#     hist_0, _ = np.histogram(data_0, bins=bins)
+#     hist_1, _ = np.histogram(data_1, bins=bins)
+#     hist_2, _ = np.histogram(data_2, bins=bins)
+#     # eps = 1e-8
+#     # hist_0 = np.maximum(hist_0, eps)
+#     # hist_1 = np.maximum(hist_1, eps)
+#     # hist_2 = np.maximum(hist_2, eps)
+#     #
+#
+#     # whole_len = len(data_0) + len(data_1) + len(data_2)
+#     hist_0 = hist_0 / sum(data_0)
+#     hist_1 = hist_1 / sum(data_1)
+#     hist_2 = hist_2 / sum(data_2)
+#
+#     # Optionally convert fraction to percentage
+#
+#     # Plot step histograms
+#     ax.step(bins[:-1], hist_0, where='post', color='blue', label='Expert 1')
+#     ax.step(bins[:-1], hist_1, where='post', color='green', label='Expert 2')
+#     ax.step(bins[:-1], hist_2, where='post', color='red', label='Expert 3')
+#     # Set axis scales and labels
+#     # Format y-axis ticks as percents
+#     # ax.set_ylim([1e-4, 100])
+#     ax.set_yscale('log')
+#     # ax.set_yticks([1e-2, 1e-1, 1, 10, 80, 100])
+#     # Define what label you want on each
+#     # ax.set_yticklabels(['0.01%', '0.1%', '1%', '10%', '80%', '100%'])
+#     ax.set_ylabel('Frequency')
+#
+#     # ax.set_xlim(201, 1900)
+#     # ax.set_ylim(0, 0.01)
+#     ax.set_xlabel('Proton Photon Sum')
+#     ax.set_title('Distribution of mean of generated predictions from experts.')
+#     ax.legend()
+#
+#     # PErcentage of sampels
+#     # hist_0, _ = np.histogram(data_0, bins=bins)
+#     # hist_1, _ = np.histogram(data_1, bins=bins)
+#     # hist_2, _ = np.histogram(data_2, bins=bins)
+#     # # eps = 1e-8
+#     # # hist_0 = np.maximum(hist_0, eps)
+#     # # hist_1 = np.maximum(hist_1, eps)
+#     # # hist_2 = np.maximum(hist_2, eps)
+#     # #
+#     # hist_0 *= 100
+#     # hist_1 *= 100
+#     # hist_2 *= 100
+#     #
+#     # # whole_len = len(data_0) + len(data_1) + len(data_2)
+#     # hist_0 = hist_0 / len(data_0)
+#     # hist_1 = hist_1 / len(data_1)
+#     # hist_2 = hist_2 / len(data_2)
+#     #
+#     # # Optionally convert fraction to percentage
+#     #
+#     # # Plot step histograms
+#     # ax.step(bins[:-1], hist_0, where='post', color='blue', label='Expert 1')
+#     # ax.step(bins[:-1], hist_1, where='post', color='green', label='Expert 2')
+#     # ax.step(bins[:-1], hist_2, where='post', color='red', label='Expert 3')
+#     # # Set axis scales and labels
+#     # # Format y-axis ticks as percents
+#     # # ax.set_ylim([1e-4, 100])
+#     # ax.set_yscale('log')
+#     # ax.set_yticks([1e-2, 1e-1, 1, 10, 80, 100])
+#     # # Define what label you want on each
+#     # ax.set_yticklabels(['0.01%', '0.1%', '1%', '10%', '80%', '100%'])
+#     # ax.set_ylabel('Percentage')
+#     #
+#     # # ax.set_xlim(201, 1900)
+#     # # ax.set_ylim(0, 0.01)
+#     # ax.set_xlabel('Proton Photon Sum')
+#     # ax.set_title('Distribution of mean of generated predictions from experts.')
+#     # ax.legend()
+#
+#     plt.tight_layout()
+#     if save_path:
+#         plt.savefig(save_path)
+#
+#     return fig
 
+
+def make_histograms(noise_cond, expert, expert_number, ch_org, device, noise_dim=10, batch_size=64, save_path=None):
     num_samples = noise_cond.shape[0]
     results_all = get_predictions_from_generator_results(batch_size, num_samples, noise_dim,
                                                          device, noise_cond, expert)
 
 
-    ch_gen = np.array(results_all).reshape(-1, 56, 44)
+    ch_gen = np.array(results_all).reshape(-1, 56, 30)
     ch_gen = pd.DataFrame(sum_channels_parallel(ch_gen)).values
     original = ch_org
     expert_gen = ch_gen
@@ -195,4 +253,11 @@ def make_histograms(noise_cond, expert, ch_org, device, noise_dim=9, batch_size=
         axis[i].set_yscale('log')
 
     fig.tight_layout(rect=[0, 0, 1, 0.975])
-    plt.show()
+
+    save_path = os.path.join(save_path, f"histogram_{expert_number}.png")
+    # Save the plot if a save path is provided
+    plt.tight_layout()
+    if save_path:
+        plt.savefig(save_path)
+
+    return fig
