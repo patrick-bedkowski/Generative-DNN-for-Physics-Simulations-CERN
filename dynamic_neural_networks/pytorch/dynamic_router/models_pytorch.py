@@ -188,10 +188,50 @@ class GeneratorNeutron(nn.Module):
 
 
 # Define the Discriminator model
+# class Discriminator(nn.Module):
+#     def __init__(self, cond_dim):
+#         super(Discriminator, self).__init__()
+#         self.name = "Discriminator-1-expert"
+#         self.conv_layers = nn.Sequential(
+#             nn.Conv2d(1, 32, kernel_size=(3, 3)),
+#             nn.BatchNorm2d(32),
+#             nn.LeakyReLU(0.1, inplace=True),
+#             nn.Dropout(0.2),
+#             nn.MaxPool2d(kernel_size=(2, 2)),
+#             nn.Conv2d(32, 16, kernel_size=(3, 3)),
+#             nn.BatchNorm2d(16),
+#             nn.LeakyReLU(0.1, inplace=True),
+#             nn.Dropout(0.2),
+#             nn.MaxPool2d(kernel_size=(2, 1))
+#         )
+#         self.fc1 = nn.Sequential(
+#             nn.Linear(16 * 12 * 12 + cond_dim, 128),
+#             nn.BatchNorm1d(128),
+#             nn.LeakyReLU(0.1, inplace=True),
+#             nn.Dropout(0.2)
+#         )
+#         self.fc2 = nn.Sequential(
+#             nn.Linear(128, 64),
+#             nn.BatchNorm1d(64),
+#             nn.LeakyReLU(0.1, inplace=True),
+#             nn.Dropout(0.2)
+#         )
+#         self.fc3 = nn.Linear(64, 1)
+#         self.sigmoid = nn.Sigmoid()
+#
+#     def forward(self, img, cond):
+#         x = self.conv_layers(img)
+#         x = x.view(x.size(0), -1)
+#         x = torch.cat((x, cond), dim=1)
+#         x = self.fc1(x)
+#         latent = self.fc2(x)
+#         out = self.fc3(latent)
+#         out = self.sigmoid(out)
+#         return out, latent
 class Discriminator(nn.Module):
     def __init__(self, cond_dim):
         super(Discriminator, self).__init__()
-        self.name = "Discriminator-1-expert"
+        self.name = "Discriminator-2-expert-features"
         self.conv_layers = nn.Sequential(
             nn.Conv2d(1, 32, kernel_size=(3, 3)),
             nn.BatchNorm2d(32),
@@ -228,6 +268,15 @@ class Discriminator(nn.Module):
         out = self.fc3(latent)
         out = self.sigmoid(out)
         return out, latent
+
+    def get_features(self, img):
+        for layer in self.conv_layers:
+            img = layer(img)
+            if isinstance(layer, nn.Conv2d):
+                last_conv_output = img  # e.g. torch.Size([28, 16, 25, 12])
+        # Global average pooling on the last conv layer output
+        features = last_conv_output.mean([2, 3])  # e.g. torch.Size([28, 16])
+        return features
 
 
 class DiscriminatorNeutron(nn.Module):
