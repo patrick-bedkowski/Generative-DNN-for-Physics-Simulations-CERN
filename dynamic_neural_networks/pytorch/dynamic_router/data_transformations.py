@@ -76,7 +76,7 @@ def transform_data_for_training(data_cond, data, data_posi, EXPERIMENT_DIR_NAME,
     # Auxiliary regressor
     scaler_poz = StandardScaler()
     data_xy = np.float32(data_posi.copy()[["max_x", "max_y"]])
-    data_xy = scaler_poz.fit_transform(data_xy)
+    # data_xy = scaler_poz.fit_transform(data_xy)
     print('Load positions:', data_xy.shape, "cond max", data_xy.max(), "min", data_xy.min())
 
     data_cond_names = data_cond.columns
@@ -100,19 +100,19 @@ def transform_data_for_training(data_cond, data, data_posi, EXPERIMENT_DIR_NAME,
         intensity_train, intensity_test, positions_train, positions_test, \
         expert_number_train, expert_number_test, scaler_poz, data_cond_names, dir_models
 
-    intensity = intensity.squeeze()  # Alternatively, use intensity.squeeze()
-    # Step that makes sure the samples are divided into test and train with equal
-    # Compute bin edges from percentiles: here we make 10 bins
-    binned_intensity = pd.qcut(intensity, q=10, duplicates='drop')
-    print('-----------------------------------')
-    print("Divided train test split with equal intensity bins of values: ", binned_intensity)
-    print('-----------------------------------')
+    # intensity = intensity.squeeze()  # Alternatively, use intensity.squeeze()
+    # # Step that makes sure the samples are divided into test and train with equal
+    # # Compute bin edges from percentiles: here we make 10 bins
+    # binned_intensity = pd.qcut(intensity, q=10, duplicates='drop')
+    # print('-----------------------------------')
+    # print("Divided train test split with equal intensity bins of values: ", binned_intensity)
+    # print('-----------------------------------')
     if zdc_type == ZDCType.PROTON:
         x_train, x_test, x_train_2, x_test_2, y_train, y_test, std_train, std_test, \
         intensity_train, intensity_test, positions_train, positions_test, \
         expert_number_train, expert_number_test, train_indices, test_indices = train_test_split(
             data, data_2, data_cond, std, intensity, data_xy, expert_number.values, indices,
-            test_size=0.2, shuffle=True, stratify=binned_intensity)
+            test_size=0.2, shuffle=True)#, stratify=binned_intensity)
 
         print("Data shapes:", x_train.shape, x_test.shape, y_train.shape, y_test.shape)
     elif zdc_type == ZDCType.NEUTRON:
@@ -120,7 +120,7 @@ def transform_data_for_training(data_cond, data, data_posi, EXPERIMENT_DIR_NAME,
         intensity_train, intensity_test, positions_train, positions_test, \
         expert_number_train, expert_number_test, train_indices, test_indices = train_test_split(
             data, data_2, data_cond, std, intensity, data_xy, expert_number, indices,
-            test_size=0.2, shuffle=True, stratify=binned_intensity)
+            test_size=0.2, shuffle=True)#, stratify=binned_intensity)
 
         print("Data shapes:", x_train.shape, x_test.shape, y_train.shape, y_test.shape)
     else:

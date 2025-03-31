@@ -187,7 +187,7 @@ class GeneratorNeutron(nn.Module):
         return x
 
 
-# Define the Discriminator model
+# # Define the Discriminator model
 # class Discriminator(nn.Module):
 #     def __init__(self, cond_dim):
 #         super(Discriminator, self).__init__()
@@ -231,7 +231,7 @@ class GeneratorNeutron(nn.Module):
 class Discriminator(nn.Module):
     def __init__(self, cond_dim):
         super(Discriminator, self).__init__()
-        self.name = "Discriminator-2-expert-features"
+        self.name = "Discriminator-3-expert-features"
         self.conv_layers = nn.Sequential(
             nn.Conv2d(1, 32, kernel_size=(3, 3)),
             nn.BatchNorm2d(32),
@@ -269,13 +269,21 @@ class Discriminator(nn.Module):
         out = self.sigmoid(out)
         return out, latent
 
+    # Disc features 2 architecture
+    # def get_features(self, img):
+    #     for layer in self.conv_layers:
+    #         img = layer(img)
+    #         if isinstance(layer, nn.Conv2d):
+    #             last_conv_output = img  # e.g. torch.Size([28, 16, 25, 12])
+    #     # Global average pooling on the last conv layer output
+    #     features = last_conv_output.mean([2, 3])  # e.g. torch.Size([28, 16])
+    #     return features #.reshape(features.size(0), -1)
+
+    # Disc features 3 architecture
     def get_features(self, img):
-        for layer in self.conv_layers:
-            img = layer(img)
-            if isinstance(layer, nn.Conv2d):
-                last_conv_output = img  # e.g. torch.Size([28, 16, 25, 12])
-        # Global average pooling on the last conv layer output
-        features = last_conv_output.mean([2, 3])  # e.g. torch.Size([28, 16])
+        # Process through all conv layers (including final MaxPool)
+        x = self.conv_layers(img)  # Shape: [batch, 16, H, W]
+        features = x.mean([2, 3])  # Global average pooling → [batch, 16]
         return features
 
 
@@ -478,66 +486,74 @@ class AttentionRouterNetwork(nn.Module):
 class AuxReg(nn.Module):
     def __init__(self):
         super(AuxReg, self).__init__()
+        self.name = "aux-architecture-2-with_droppout_batchnorm"
 
+        # Feature extraction layers
         self.conv3 = nn.Conv2d(1, 32, kernel_size=3)
-        self.conv3_bd = nn.Sequential(
-            nn.BatchNorm2d(32),
-            nn.LeakyReLU(0.1),
-            nn.Dropout(0.2)
-        )
-        self.pool3 = nn.MaxPool2d(kernel_size=(2, 2))
+        self.bn3 = nn.BatchNorm2d(32)
+        self.leaky3 = nn.LeakyReLU(0.1)
+        self.pool3 = nn.MaxPool2d(2, 2)
 
         self.conv4 = nn.Conv2d(32, 64, kernel_size=3)
-        self.conv4_bd = nn.Sequential(
-            nn.BatchNorm2d(64),
-            nn.LeakyReLU(0.1),
-            nn.Dropout(0.2)
-        )
-        self.pool4 = nn.MaxPool2d(kernel_size=(2, 1))
+        self.bn4 = nn.BatchNorm2d(64)
+        self.leaky4 = nn.LeakyReLU(0.1)
+        self.pool4 = nn.MaxPool2d((2, 1))
 
         self.conv5 = nn.Conv2d(64, 128, kernel_size=3)
-        self.conv5_bd = nn.Sequential(
-            nn.BatchNorm2d(128),
-            nn.LeakyReLU(0.1),
-            nn.Dropout(0.2)
-        )
-        self.pool5 = nn.MaxPool2d(kernel_size=(2, 1))
+        self.bn5 = nn.BatchNorm2d(128)
+        self.leaky5 = nn.LeakyReLU(0.1)
+        self.pool5 = nn.MaxPool2d((2, 1))
 
         self.conv6 = nn.Conv2d(128, 256, kernel_size=3)
-        self.conv6_bd = nn.Sequential(
-            nn.BatchNorm2d(256),
-            nn.LeakyReLU(0.1),
-            nn.Dropout(0.2)
-        )
+        self.bn6 = nn.BatchNorm2d(256)
+        self.leaky6 = nn.LeakyReLU(0.1)
 
+        # Dropout layers (separated from feature path)
+        self.dropout = nn.Dropout(0.2)
+
+        # Final layers
         self.flatten = nn.Flatten()
-        self.dense = nn.Linear(256 * 3 * 8, 2)  # Adjust the input dimension based on your input image size
+        self.dense = nn.Linear(256 * 3 * 8, 2)  # Update dimensions based on input size
 
     def forward(self, x):
-        x = self.conv3(x)
-        x = self.conv3_bd(x)
-        x = self.pool3(x)
-
-        x = self.conv4(x)
-        x = self.conv4_bd(x)
-        x = self.pool4(x)
-
-        x = self.conv5(x)
-        x = self.conv5_bd(x)
-        x = self.pool5(x)
-
-        x = self.conv6(x)
-        x = self.conv6_bd(x)
-
+        # Original forward pass with dropout
+        x = self.pool3(self.dropout(self.leaky3(self.bn3(self.conv3(x)))))
+        x = self.pool4(self.dropout(self.leaky4(self.bn4(self.conv4(x)))))
+        x = self.pool5(self.dropout(self.leaky5(self.bn5(self.conv5(x)))))
+        x = self.dropout(self.leaky6(self.bn6(self.conv6(x))))
         x = self.flatten(x)
-        x = self.dense(x)
+        return self.dense(x)
 
-        return x
+    def get_features(self, img):
+        x = self.pool3(self.leaky3(self.bn3(self.conv3(img))))
+        x = self.pool4(self.leaky4(self.bn4(self.conv4(x))))
+        x = self.pool5(self.leaky5(self.bn5(self.conv5(x))))
+        x = self.leaky6(self.bn6(self.conv6(x)))
+        features = x.mean([2, 3])  # Global average pooling
+        return features  # [112, 256] E.g.
+
+    # def get_features(self, img):
+    #     # Store original mode
+    #     original_mode = self.training
+    #
+    #     # Feature extraction without dropout
+    #     with torch.no_grad():
+    #         self.eval()
+    #         x = self.pool3(self.leaky3(self.bn3(self.conv3(img))))
+    #         x = self.pool4(self.leaky4(self.bn4(self.conv4(x))))
+    #         x = self.pool5(self.leaky5(self.bn5(self.conv5(x))))
+    #         x = self.leaky6(self.bn6(self.conv6(x)))
+    #         features = x.mean([2, 3])  # Global average pooling
+    #
+    #     # Restore original mode
+    #     self.train(original_mode)
+    #     return features  # [112, 256] E.g.
 
 
 class AuxRegNeutron(nn.Module):
     def __init__(self):
         super(AuxRegNeutron, self).__init__()
+        self.name = "aux-architecture-1"
 
         self.conv3 = nn.Conv2d(1, 32, kernel_size=3)
         self.conv3_bd = nn.Sequential(
