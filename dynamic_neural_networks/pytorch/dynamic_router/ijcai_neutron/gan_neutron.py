@@ -39,7 +39,7 @@ SAVE_EXPERIMENT_DATA = True
 PLOT_IMAGES = True
 
 # SETTINGS & PARAMETERS
-WS_MEAN_SAVE_THRESHOLD = 2
+WS_MEAN_SAVE_THRESHOLD = 9.5
 DI_STRENGTH = 0.1
 IN_STRENGTH = 1e-3  #0.001
 IN_STRENGTH_LOWER_VAL = 0.001  # 0.000001
@@ -51,16 +51,16 @@ BATCH_SIZE = 256
 NOISE_DIM = 10
 N_COND = 9  # number of conditional features
 EPOCHS = 150
-LR_G = 1e-4
+LR_G = 1e-5
 LR_D = 1e-5
 LR_A = 1e-4
 LR_R = 1e-3
 
 # Router loss parameters
 ED_STRENGTH = 0 #0.01  # Strength on the expert distribution loss in the router loss calculation
-GEN_STRENGTH = 1e-2  # Strength on the generator loss in the router loss calculation
-DIFF_STRENGTH = 1e-4  # Differentation on the generator loss in the router loss calculation
-UTIL_STRENGTH = 1e-2  # Strength on the expert utilization entropy in the router loss calculation
+GEN_STRENGTH = 0
+DIFF_STRENGTH = 0
+UTIL_STRENGTH = 0
 STOP_ROUTER_TRAINING_EPOCH = EPOCHS
 CLIP_DIFF_LOSS = "No-clip" #-1.0
 
@@ -148,20 +148,20 @@ for _ in range(N_RUNS):
                                                                                                    intensity,
                                                                                                    generator.in_strength)
 
-        gen_loss = gen_loss + div_loss + intensity_loss
+        gen_loss = gen_loss #+ div_loss + intensity_loss
 
         # Train auxiliary regressor
-        a_optimizer.zero_grad()
-        generated_positions = a_reg(fake_images)
+        #a_optimizer.zero_grad()
+        #generated_positions = a_reg(fake_images)
 
-        aux_reg_loss = aux_reg_criterion(true_positions, generated_positions, scaler_poz)
-
-        gen_loss += aux_reg_loss*AUX_STRENGTH
+        #aux_reg_loss = aux_reg_criterion(true_positions, generated_positions, scaler_poz, AUX_STRENGTH)
+        aux_reg_loss = torch.tensor(0.0, requires_grad=False).to(device)
+        #gen_loss += aux_reg_loss
 
         gen_loss.backward()
         g_optimizer.param_groups[0]['lr'] = LR_G * class_counts.clone().detach()
         g_optimizer.step()
-        a_optimizer.step()
+        #a_optimizer.step()
 
         return gen_loss.data, div_loss.data, intensity_loss.data, aux_reg_loss.data, std_intensity, mean_intensity,\
                mean_intenisties
