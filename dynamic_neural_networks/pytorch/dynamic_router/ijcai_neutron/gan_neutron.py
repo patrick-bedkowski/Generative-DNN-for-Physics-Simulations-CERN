@@ -39,14 +39,14 @@ SAVE_EXPERIMENT_DATA = True
 PLOT_IMAGES = True
 
 # SETTINGS & PARAMETERS
-WS_MEAN_SAVE_THRESHOLD = 9.5
+WS_MEAN_SAVE_THRESHOLD = 2
 DI_STRENGTH = 0.1
 IN_STRENGTH = 1e-3  #0.001
 IN_STRENGTH_LOWER_VAL = 0.001  # 0.000001
 AUX_STRENGTH = 0.001
 
 N_RUNS = 1
-N_EXPERTS = 3
+N_EXPERTS = 1
 BATCH_SIZE = 256
 NOISE_DIM = 10
 N_COND = 9  # number of conditional features
@@ -66,14 +66,10 @@ CLIP_DIFF_LOSS = "No-clip" #-1.0
 
 DATA_IMAGES_PATH = "/net/tscratch/people/plgpbedkowski/data/neutron/data_neutron_photonsum_neutron_1_3360.pkl"
 DATA_COND_PATH = "/net/tscratch/people/plgpbedkowski/data/neutron/data_cond_neutron_photonsum_neutron_1_3360.pkl"
-# data of coordinates of maximum value of pixel on the images
 DATA_POSITIONS_PATH = "/net/tscratch/people/plgpbedkowski/data/neutron/data_coord_photonsum_neutron_1_3360.pkl"
 INPUT_IMAGE_SHAPE = (44, 44)
 
-NAME = f"ijcai2025_neutron_{ED_STRENGTH}_{GEN_STRENGTH}_{UTIL_STRENGTH}"
-# NAME = f"Sanitycheck-intenisty-clamp-max-1-expert"
-# NAME = f"removed-detach-from-intensity-Sanitycheck-intenisty-with-scaler-on-the-input-and-output-expert-without-clamp-1"
-# NAME = f"test_modified_intensity_refactoring_test_3_disc_expertsim"
+NAME = f"ijcai2025_neutron_gan"
 
 for _ in range(N_RUNS):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -132,9 +128,7 @@ for _ in range(N_RUNS):
         g_optimizer.zero_grad()
 
         noise = torch.randn(BATCH_SIZE, NOISE_DIM, device=device)
-        # noise.requires_grad = False
         noise_2 = torch.randn(BATCH_SIZE, NOISE_DIM, device=device)
-        # noise_2.requires_grad = False
 
         # generate fake images
         fake_images = generator(noise, cond)
@@ -160,9 +154,9 @@ for _ in range(N_RUNS):
         a_optimizer.zero_grad()
         generated_positions = a_reg(fake_images)
 
-        aux_reg_loss = aux_reg_criterion(true_positions, generated_positions, scaler_poz, AUX_STRENGTH)
+        aux_reg_loss = aux_reg_criterion(true_positions, generated_positions, scaler_poz)
 
-        gen_loss += aux_reg_loss
+        gen_loss += aux_reg_loss*AUX_STRENGTH
 
         gen_loss.backward()
         g_optimizer.param_groups[0]['lr'] = LR_G * class_counts.clone().detach()
@@ -187,7 +181,7 @@ for _ in range(N_RUNS):
 
         # calculate loss for generated images
         fake_images = generator(noise, cond)
-        fake_output, fake_latent = disc(fake_images, cond)
+        fake_output, fake_latent = disc(fake_images.detach(), cond)
         fake_labels = torch.zeros_like(fake_output)
         loss_fake_disc = criterion(fake_output, fake_labels)
 
@@ -559,7 +553,7 @@ for _ in range(N_RUNS):
         name=wandb_run_name,
         config=config_wandb,
         tags=["stratified_batch_samples",
-              "param_sweep",
+              "ijcai",
               f"neutron_min_{photon_sum_neutron_min}",
               f"neutron_max_{photon_sum_neutron_max}",
               "sdi_gan_intensity"]
