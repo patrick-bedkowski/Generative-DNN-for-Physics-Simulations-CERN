@@ -1,6 +1,6 @@
 from models_pytorch import Generator, Discriminator, RouterNetwork, AuxReg,\
     GeneratorNeutron, DiscriminatorNeutron, AuxRegNeutron, count_model_parameters,\
-    AttentionRouterNetwork
+    AttentionRouterNetwork, ParallelExpertWrapper
 
 import torch
 import torch.optim as optim
@@ -87,7 +87,12 @@ def setup_experts_neutron(N_EXPERTS, N_COND, NOISE_DIM, LR_G, LR_D, LR_A, DI_STR
     print(f"Aux Reg model has {num_params} trainable parameters.")
     aux_reg_optimizers = [optim.Adam(aux_reg.parameters(), lr=LR_A) for aux_reg in aux_regs]
 
-    return generators, generator_optimizers, discriminators, discriminator_optimizers, aux_regs, aux_reg_optimizers
+    # Replace with wrapped version
+    # From training_setup.py
+    base_generator = Generator(NOISE_DIM, N_COND, DI_STRENGTH, IN_STRENGTH).to(device)
+    expert_wrapper = ParallelExpertWrapper([base_generator] * N_EXPERTS).to(device)
+
+    return expert_wrapper, generators, generator_optimizers, discriminators, discriminator_optimizers, aux_regs, aux_reg_optimizers
 
 
 def setup_router_attention(cond_dim, n_experts, num_heads, hidden_dim, lr_r, device=torch.device("cuda:0")):
