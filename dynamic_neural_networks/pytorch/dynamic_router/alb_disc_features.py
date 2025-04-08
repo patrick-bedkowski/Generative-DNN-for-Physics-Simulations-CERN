@@ -1,6 +1,8 @@
 import time
 import os
 import wandb
+# from torchview import draw_graph
+from typing import List
 
 import pandas as pd
 import numpy as np
@@ -36,13 +38,13 @@ if torch.cuda.is_available():
 os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 torch.autograd.set_detect_anomaly(True)
 
-SAVE_EXPERIMENT_DATA = False
+SAVE_EXPERIMENT_DATA = True
 PLOT_IMAGES = True
 
 # SETTINGS & PARAMETERS
-WS_MEAN_SAVE_THRESHOLD = 2
+WS_MEAN_SAVE_THRESHOLD = 3
 DI_STRENGTH = 0.1
-IN_STRENGTH = 1e-3  #0.001
+IN_STRENGTH = 1e-3  # 0.001
 IN_STRENGTH_LOWER_VAL = 0.001  # 0.000001
 AUX_STRENGTH = 0.001
 
@@ -62,24 +64,29 @@ LR_R = 1e-3
 # Router loss parameters
 ED_STRENGTH = 0 #0.01  # Strength on the expert distribution loss in the router loss calculation
 GEN_STRENGTH = 1e-1  # Strength on the generator loss in the router loss calculation
-DIFF_STRENGTH = 1e-3  # Differentation on the generator loss in the router loss calculation
+DIFF_STRENGTH = 1e-2  # Differentation on the generator loss in the router loss calculation
 UTIL_STRENGTH = 0  #  1e-4  # Strength on the expert utilization entropy in the router loss calculation
-ALB_STRENGTH = 1e-5  # 1e-3  #1e-4  # Strength on the adaptive load balancing in the router loss calculation
+ALB_STRENGTH = 1e-3  # 1e-3  #1e-4  # Strength on the adaptive load balancing in the router loss calculation
 STOP_ROUTER_TRAINING_EPOCH = EPOCHS
 CLIP_DIFF_LOSS = "No-clip" #-1.0
 
 DATA_IMAGES_PATH = "/net/tscratch/people/plgpbedkowski/data/data_proton_photonsum_proton_1_2312.pkl"
 DATA_COND_PATH = "/net/tscratch/people/plgpbedkowski/data/data_cond_photonsum_proton_1_2312.pkl"
-# data of coordinates of maximum value of pixel on the images
 DATA_POSITIONS_PATH = "/net/tscratch/people/plgpbedkowski/data/data_coord_proton_photonsum_proton_1_2312.pkl"
+
+# DATA_IMAGES_PATH = "/net/tscratch/people/plgpbedkowski/data/small_intervals/data_photonsum_proton_18_493_neutron_0_3145.pkl"
+# DATA_COND_PATH = "/net/tscratch/people/plgpbedkowski/data/small_intervals/data_cond_photonsum_proton_18_493_neutron_0_3145.pkl"
+# DATA_POSITIONS_PATH = "/net/tscratch/people/plgpbedkowski/data/small_intervals/data_coord_photonsum_proton_18_493_neutron_0_3145.pkl"
+
 INPUT_IMAGE_SHAPE = (56, 30)
 MIN_PROTON_THRESHOLD = 1
+# MAX_PROTON_THRESHOLD = 2312
 
 CHECKPOINT_DATA_INDICES_FILE = None
 CHECKPOINT_RUN_MODELS = None  #"/net/tscratch/people/plgpbedkowski/dynamic_neural_networks/experiments/experiments/test_adaptive_load_balancing_0.0001_0_0.1_0_0.0001_1e-05_0.001_21_02_2025_16_27_09_5_2312_21_02_2025_16_27_09/models"
 epoch_to_load = None  #149
 
-NAME = f"test_alb_disc_features_stratch_batch_intensity"
+NAME = f"test_detach_alb_disc_features"
 disc_type_features = 'conv'
 
 for _ in range(N_RUNS):
@@ -88,18 +95,19 @@ for _ in range(N_RUNS):
     data_cond = pd.read_pickle(DATA_COND_PATH)#[:20000]
     data_posi = pd.read_pickle(DATA_POSITIONS_PATH)#[:20000]
 
-    data_cond_idx = data_cond[data_cond.proton_photon_sum >= MIN_PROTON_THRESHOLD].index
+    # LIMIT the initial n of photons
+    data_cond_idx = data_cond[(data_cond.proton_photon_sum >= MIN_PROTON_THRESHOLD)].index
+    # data_cond_idx = data_cond[(data_cond.proton_photon_sum >= MIN_PROTON_THRESHOLD) &
+    #                           (data_cond.proton_photon_sum <= MAX_PROTON_THRESHOLD)].index
     data_cond = data_cond.loc[data_cond_idx].reset_index(drop=True)
     data = data[data_cond_idx]
     data_posi = data_posi.loc[data_cond_idx].reset_index(drop=True)
 
     photon_sum_proton_min, photon_sum_proton_max = data_cond.proton_photon_sum.min(), data_cond.proton_photon_sum.max()
     print('Loaded positions: ', data_posi.shape, "max:", data_posi.values.max(), "min:", data_posi.values.min())
-    TAGS_RUN = ["stratified_batch_samples",
-                "param_sweep",
+    TAGS_RUN = ["param_sweep",
                 f"proton_min_{photon_sum_proton_min}",
-                f"proton_max_{photon_sum_proton_max}",
-                "sdi_gan_intensity"]
+                f"proton_max_{photon_sum_proton_max}"]
     DATE_STR = datetime.now().strftime("%d_%m_%Y_%H_%M_%S_%f")[:-3]
     wandb_run_name = f"{NAME}_{DATE_STR}"
     EXPERIMENT_DIR_NAME = f"experiments/{wandb_run_name}"
@@ -132,6 +140,29 @@ for _ in range(N_RUNS):
     router_network, router_optimizer = setup_router(N_COND, N_EXPERTS, LR_R, device)
     # router_network, router_optimizer = setup_router_attention(N_COND, N_EXPERTS, N_HEADS, HIDDEN_DIM, LR_R, device)
 
+    # Draw Networks:
+    # Visualize an individual generator
+    # generator_graph = draw_graph(generators[0],
+    #                              input_size=[(BATCH_SIZE, NOISE_DIM), (BATCH_SIZE, N_COND)],
+    #                              device='meta')
+    # generator_graph.visual_graph.render(filename="generator_graph.png", format="png")
+    #
+    # # Visualize the router network
+    # router_graph = draw_graph(router_network,
+    #                           input_size=(BATCH_SIZE, N_COND),
+    #                           device='meta')
+    # router_graph.visual_graph.render(filename="router_graph.png", format="png")
+    #
+    # # Visualize a discriminator
+    # disc_graph = draw_graph(discriminators[0],
+    #                         input_size=[(BATCH_SIZE, 1, *INPUT_IMAGE_SHAPE), (BATCH_SIZE, N_COND)],
+    #                         device='meta')
+    # disc_graph.visual_graph.render(filename="discriminator_graph.png", format="png")
+    #
+    # print('done')
+    # import sys
+    # sys.exit(0)
+
     if CHECKPOINT_RUN_MODELS:
         load_checkpoint_weights(
             CHECKPOINT_RUN_MODELS,
@@ -148,14 +179,12 @@ for _ in range(N_RUNS):
         )
 
     def generator_train_step(generator, discriminator, a_reg, cond, g_optimizer, a_optimizer, criterion,
-                             true_positions, std, intensity, class_counts, BATCH_SIZE):
+                             true_positions, std, intensity, class_counts, batch_size):
         # Train Generator
         g_optimizer.zero_grad()
 
-        noise = torch.randn(BATCH_SIZE, NOISE_DIM, device=device)
-        # noise.requires_grad = False
-        noise_2 = torch.randn(BATCH_SIZE, NOISE_DIM, device=device)
-        # noise_2.requires_grad = False
+        noise = torch.randn(batch_size, NOISE_DIM, device=device)
+        noise_2 = torch.randn(batch_size, NOISE_DIM, device=device)
 
         # generate fake images
         fake_images = generator(noise, cond)
@@ -194,10 +223,9 @@ for _ in range(N_RUNS):
                mean_intenisties
 
 
-    def discriminator_train_step(disc, generator, d_optimizer, criterion, real_images, cond, BATCH_SIZE):
+    def discriminator_train_step(disc, generator, d_optimizer, criterion, real_images, cond, batch_size) -> np.float32:
         """Returns Python float of disc_loss value"""
         # Train discriminator
-        noise = torch.randn(BATCH_SIZE, NOISE_DIM, device=device)
 
         d_optimizer.zero_grad()
 
@@ -207,17 +235,18 @@ for _ in range(N_RUNS):
         loss_real_disc = criterion(real_output, real_labels)
 
         # calculate loss for generated images
+        noise = torch.randn(batch_size, NOISE_DIM, device=device)
         fake_images = generator(noise, cond)
-        fake_output, fake_latent = disc(fake_images, cond)
+        fake_output, fake_latent = disc(fake_images.detach(), cond)
         fake_labels = torch.zeros_like(fake_output)
         loss_fake_disc = criterion(fake_output, fake_labels)
 
         # Accumulate and compute discriminator loss
         disc_loss = loss_real_disc + loss_fake_disc
         disc_loss.backward()  # call backward computations on accumulated gradients for efficiency
-        d_optimizer.step()
 
-        discriminator_features = disc.get_features(fake_images.clone().detach())
+        discriminator_features = disc.get_features(fake_images.clone().detach()).detach()  # detach to prevent generator ipdate
+        d_optimizer.step()
         return disc_loss.item(), discriminator_features
 
     def train_step(batch, epoch):
@@ -255,14 +284,14 @@ for _ in range(N_RUNS):
             BATCH_SIZE = len(selected_indices)
             if selected_indices.numel() <= 1:
                 disc_losses[i] = torch.tensor(0.0, requires_grad=True).to(device)
-                disc_features.append(torch.tensor(0.0, requires_grad=True).to(device))
+                disc_features.append(torch.zeros((1, 16), requires_grad=False).to(device))  # append a zero activation feature vector. Shape of the conv is 16 channels at the last layer
                 continue
 
             # Clone or detach tensors to avoid in-place modifications
             selected_cond = cond[selected_indices]
             selected_generator = generators[i]
-            selected_discriminator = discriminators[i]
-            selected_discriminator_optimizer = discriminator_optimizers[i]
+            selected_discriminator = discriminators[0]  # always take first discriminator
+            selected_discriminator_optimizer = discriminator_optimizers[0]  # always take first discriminator
             selected_real_images = real_images[selected_indices]
 
             disc_loss, discriminator_features = discriminator_train_step(selected_discriminator, selected_generator,
@@ -287,8 +316,10 @@ for _ in range(N_RUNS):
             selected_intensity = intensity[selected_indices]
             selected_std = std[selected_indices]
             selected_generator = generators[i]
-            selected_discriminator = discriminators[i]
+            selected_generator_optimizer = generator_optimizers[i]
+            selected_discriminator = discriminators[0]
             selected_aux_reg = aux_regs[i]
+            selected_aux_reg_optimizer = aux_reg_optimizers[i]
             selected_class_counts = class_counts_adjusted[i]
 
             gen_loss, div_loss, intensity_loss, \
@@ -296,8 +327,8 @@ for _ in range(N_RUNS):
                                                                                                  selected_discriminator,
                                                                                                  selected_aux_reg,
                                                                                                  selected_cond,
-                                                                                                 generator_optimizers[i],
-                                                                                                 aux_reg_optimizers[i],
+                                                                                                 selected_generator_optimizer,
+                                                                                                 selected_aux_reg_optimizer,
                                                                                                  binary_cross_entropy_criterion,
                                                                                                  selected_true_positions,
                                                                                                  selected_std,
@@ -327,29 +358,37 @@ for _ in range(N_RUNS):
                                                                           ED_STRENGTH) if ED_STRENGTH != 0. else torch.tensor(0.0, requires_grad=False)
 
             # DIFFERENTIATION LOSS
-            def compute_differentiation_loss(discriminator_features):
-                loss = 0
+            def compute_differentiation_loss(discriminator_features: List):
+                """
+                Compute differentiation loss for all experts based on the feature vectors from convolution layers.
+                param: discriminator_features: List of tensors containing the features of each expert
+                return: Differentiation loss
+                """
+                loss = torch.zeros(1, device=device)
                 num_experts = len(discriminator_features)
-                print("N Experts", num_experts)
+                # print("N Experts", num_experts)
                 with torch.no_grad():  # Detach computations from graph to save memory
                     feature_means = [feat.mean(0, keepdim=True) for feat in discriminator_features]
-                    print("Feature means: ", feature_means)
+                    feature_vars = [features.var(dim=0) for features in discriminator_features]
 
                 for i, j in combinations(range(num_experts), 2):
                     # Reattach to computation graph only for final loss calculation
                     mean_i = feature_means[i].detach().requires_grad_(True)
                     mean_j = feature_means[j].detach().requires_grad_(True)
-                    print("MEAN SHAPE", mean_i.shape, mean_j.shape)
-                    cos_sim = F.cosine_similarity(mean_i, mean_j)
-                    print("Cos Sim", cos_sim)
-                    dissimilarity = 1 - cos_sim
-                    print("dissimialrity", dissimilarity)
+
+                    var_i = feature_vars[i].detach().requires_grad_(True)
+                    var_j = feature_vars[j].detach().requires_grad_(True)
+                    # print("MEAN SHAPE", mean_i.shape, mean_j.shape)
+                    cos_diss_means = 1- F.cosine_similarity(mean_i, mean_j)
+                    cos_diss_vars = 1- F.cosine_similarity(mean_i, mean_j)
+                    # print("Cos Sim", cos_sim)
+                    dissimilarity = 0.8*cos_diss_means + 0.2*cos_diss_vars
+                    # print("dissimialrity", dissimilarity)
                     loss += dissimilarity
-                return -torch.tensor(loss)
+                return loss
 
             differentiation_loss = compute_differentiation_loss(disc_features) if DIFF_STRENGTH != 0. else torch.tensor(0.0)
             differentiation_loss = differentiation_loss * DIFF_STRENGTH
-            # print(differentiation_loss)
             # OLD BASED ON MEAN PHOTONSUMS
             # Compute differentiation loss for all experts
             # differentiation_loss_intensities = sum(
@@ -367,7 +406,7 @@ for _ in range(N_RUNS):
             routing_scores = predicted_expert_one_hot.sum(dim=0)
             alb_loss = calculate_adaptive_load_balancing_loss(routing_scores, ALB_STRENGTH) if ALB_STRENGTH != 0. else torch.tensor(0.0)
 
-            router_loss = gan_loss_scaled + expert_distribution_loss - expert_entropy_loss + differentiation_loss + alb_loss
+            router_loss = gan_loss_scaled + expert_distribution_loss - expert_entropy_loss - differentiation_loss + alb_loss
 
             if epoch < STOP_ROUTER_TRAINING_EPOCH:
                 # Train Router Network
@@ -381,6 +420,7 @@ for _ in range(N_RUNS):
             expert_distribution_loss = torch.tensor(0.0)
             differentiation_loss = torch.tensor(0.0)
             expert_entropy_loss = torch.tensor(0.0)
+            alb_loss = torch.tensor(0.0)
 
         gen_losses = [gen_loss.item() for gen_loss in gen_losses]
         disc_losses = [disc_loss.item() for disc_loss in disc_losses]

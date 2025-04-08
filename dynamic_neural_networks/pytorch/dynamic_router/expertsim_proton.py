@@ -1,40 +1,3 @@
-# MOE APPEAOCH
-# General training of experts: Learning rate is scaled according to number of samples in the batch
-
-# 29.11.24 - added disc_loss to the router loss
-
-# Genrator architecture: sdigan-intensity-aux-reg-1-disc-3-experts
-
-# ROUTER LOSS: generator's loss * Expert Distribution Regularization
-# 1. Generator's Loss: Combined loss of all generators, focusing on how well they reconstruct the target output.
-# 2. Expert Distribution Regularization:
-#    This regularization term aims to enforce a balanced and effective task distribution among experts.
-#    It is designed to minimize imbalances in how the router assigns tasks (or images) to different experts.
-#    The regularization is calculated by considering the gating probabilities and the feature distances (e.g., sum of pixels),
-#    encouraging similar tasks to be routed to the same expert and dissimilar tasks to different experts.
-#    This results in improved specialization of experts and better overall model performance.
-#
-#    - Gating Probabilities: The likelihoods assigned by the router to each expert for each task.
-#    - Feature Distances: Measures such as the Euclidean distance between features (e.g., sum of pixels),
-#      used to determine the similarity between tasks.
-#    - Regularization Loss: Encourages routing similar tasks to the same expert and different tasks to different experts,
-#      promoting balanced expert utilization.
-#    - Goal: Minimize the regularization loss to ensure that each expert specializes in a distinct subset of tasks,
-#      thereby improving the diversity and effectiveness of the generated outputs.
-
-# Modification: 20.08.24
-# Added calculation of WS ofr the whole distribution. Each generator generates samples, then join all of them and calculate.
-
-# Modification: 29.08.24
-# Modified the calculation of the WS. Previously it used the selected indices of samples corresponding to the experts
-# from the 1-5, 6-17, 18+ photons sums intervals. Now the samples are selected by the router.
-
-# Modification: 03.10.24
-# Added 3 discriminators approach
-
-# Modification 06.12.24
-# Simplified the training files
-
 import time
 import os
 import wandb
@@ -56,9 +19,9 @@ from utils import (sum_channels_parallel, calculate_ws_ch_proton_model,
                    calculate_expert_distribution_loss,
                    regressor_loss, calculate_expert_utilization_entropy,
                    StratifiedBatchSampler, plot_cond_pca_tsne, plot_expert_heatmap)
-from data_transformations import transform_data_for_training
+from data_transformations import transform_data_for_training, ZDCType, SCRATCH_PATH
 from training_setup import setup_experts, setup_router, load_checkpoint_weights
-from training_utils import save_models
+from training_utils import save_models_and_architectures
 
 
 print(torch.cuda.is_available())
@@ -76,18 +39,18 @@ SAVE_EXPERIMENT_DATA = True
 PLOT_IMAGES = True
 
 # SETTINGS & PARAMETERS
-WS_MEAN_SAVE_THRESHOLD = 3
+WS_MEAN_SAVE_THRESHOLD = 6.25
 DI_STRENGTH = 0.1
 IN_STRENGTH = 1e-3  #0.001
 IN_STRENGTH_LOWER_VAL = 0.001  # 0.000001
-AUX_STRENGTH = 0.001
+AUX_STRENGTH = 1e-3
 
 N_RUNS = 1
-N_EXPERTS = 3
+N_EXPERTS = 6
 BATCH_SIZE = 256
 NOISE_DIM = 10
 N_COND = 9  # number of conditional features
-EPOCHS = 150
+EPOCHS = 200
 LR_G = 1e-4
 LR_D = 1e-5
 LR_A = 1e-4
@@ -95,8 +58,8 @@ LR_R = 1e-3
 
 # Router loss parameters
 ED_STRENGTH = 0 #0.01  # Strength on the expert distribution loss in the router loss calculation
-GEN_STRENGTH = 1e-2  # Strength on the generator loss in the router loss calculation
-DIFF_STRENGTH = 1e-4  # Differentation on the generator loss in the router loss calculation
+GEN_STRENGTH = 1e-1  # Strength on the generator loss in the router loss calculation
+DIFF_STRENGTH = 1e-5  # Differentation on the generator loss in the router loss calculation
 UTIL_STRENGTH = 1e-2  # Strength on the expert utilization entropy in the router loss calculation
 STOP_ROUTER_TRAINING_EPOCH = EPOCHS
 CLIP_DIFF_LOSS = "No-clip" #-1.0
@@ -106,8 +69,12 @@ DATA_COND_PATH = "/net/tscratch/people/plgpbedkowski/data/data_cond_photonsum_pr
 # data of coordinates of maximum value of pixel on the images
 DATA_POSITIONS_PATH = "/net/tscratch/people/plgpbedkowski/data/data_coord_proton_photonsum_proton_1_2312.pkl"
 INPUT_IMAGE_SHAPE = (56, 30)
+MIN_PROTON_THRESHOLD = 1
 
-NAME = f"after_intensity_fix_PARAM_SWEEP_no_clip_loss_sep_aux_3_exp_diff_expert_distribution_utilization_{ED_STRENGTH}_{GEN_STRENGTH}_{UTIL_STRENGTH}_no_stop_{STOP_ROUTER_TRAINING_EPOCH}"
+NAME = f"ijcai2025_proton_{ED_STRENGTH}_{GEN_STRENGTH}_{UTIL_STRENGTH}"
+# NAME = f"no_entropy_min_{MIN_PROTON_THRESHOLD}_ijcai2025_proton_{ED_STRENGTH}_{GEN_STRENGTH}_{UTIL_STRENGTH}"
+
+# NAME = f"diff_with_intensitiy_and_std_ijcai2025_proton_{ED_STRENGTH}_{GEN_STRENGTH}_{UTIL_STRENGTH}"
 # NAME = f"Sanitycheck-intenisty-clamp-max-1-expert"
 # NAME = f"removed-detach-from-intensity-Sanitycheck-intenisty-with-scaler-on-the-input-and-output-expert-without-clamp-1"
 # NAME = f"test_modified_intensity_refactoring_test_3_disc_expertsim"
@@ -116,13 +83,23 @@ for _ in range(N_RUNS):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     data = pd.read_pickle(DATA_IMAGES_PATH)
     data_cond = pd.read_pickle(DATA_COND_PATH)
-    photon_sum_proton_min, photon_sum_proton_max = data_cond.proton_photon_sum.min(), data_cond.proton_photon_sum.max()
     data_posi = pd.read_pickle(DATA_POSITIONS_PATH)
+
+    data_cond_idx = data_cond[data_cond.proton_photon_sum >= MIN_PROTON_THRESHOLD].index
+    data_cond = data_cond.loc[data_cond_idx].reset_index(drop=True)
+    data = data[data_cond_idx]
+    data_posi = data_posi.loc[data_cond_idx].reset_index(drop=True)
+
+    photon_sum_proton_min, photon_sum_proton_max = data_cond.proton_photon_sum.min(), data_cond.proton_photon_sum.max()
     print('Loaded positions: ', data_posi.shape, "max:", data_posi.values.max(), "min:", data_posi.values.min())
 
     DATE_STR = datetime.now().strftime("%d_%m_%Y_%H_%M_%S")
-    wandb_run_name = f"{NAME}_{LR_G}_{LR_D}_{LR_R}_{DATE_STR}"
-    EXPERIMENT_DIR_NAME = f"experiments/{wandb_run_name}_{int(photon_sum_proton_min)}_{int(photon_sum_proton_max)}_{DATE_STR}"
+    wandb_run_name = f"{NAME}_{DATE_STR}"
+    EXPERIMENT_DIR_NAME = f"experiments/{wandb_run_name}"
+    EXPERIMENT_DIR_NAME = os.path.join(SCRATCH_PATH, EXPERIMENT_DIR_NAME)
+
+    EXPERIMENT_DIR_NAME=\
+        "/net/people/plgrid/plgpbedkowski/pytorch/dynamic_router/experiments/ijcai2025_proton_0_0.1_0.01_08_04_2025_03_25_47"
 
     ### TRANSFORM DATA FOR TRAINING ###
     x_train, x_test, x_train_2, x_test_2, y_train, y_test, std_train, std_test, \
@@ -131,7 +108,9 @@ for _ in range(N_RUNS):
         data_cond, data,
         data_posi,
         EXPERIMENT_DIR_NAME,
-        SAVE_EXPERIMENT_DATA)
+        ZDCType.PROTON,
+        SAVE_EXPERIMENT_DATA,
+        load_data_file_from_checkpoint=True)
 
     # CALCULATE DISTRIBUTION OF CHANNELS IN ORIGINAL TEST DATA #
     org = np.exp(x_test) - 1
@@ -148,19 +127,25 @@ for _ in range(N_RUNS):
                                                                            LR_A, DI_STRENGTH, IN_STRENGTH, device)
     router_network, router_optimizer = setup_router(N_COND, N_EXPERTS, LR_R, device)
 
-    epoch_to_load = None
-    # saved_run_data = "experiments/test_upload_files"
-    # epoch_to_load = 110
-    # # Load weights
-    # load_checkpoint_weights(
-    #     saved_run_data,
-    #     epoch_to_load,
-    #     generators,
-    #     discriminators,
-    #     aux_regs,
-    #     router_network,
-    #     device=device
-    # )
+    # epoch_to_load = None
+    saved_run_data = "/net/people/plgrid/plgpbedkowski/pytorch/dynamic_router/experiments/ijcai2025_proton_0_0.1_0.01_08_04_2025_03_25_47"
+    epoch_to_load = 33
+    CHECKPOINT_RUN_MODELS = "/net/people/plgrid/plgpbedkowski/pytorch/dynamic_router/experiments/ijcai2025_proton_0_0.1_0.01_08_04_2025_03_25_47/models"
+
+    # Load weights
+    load_checkpoint_weights(
+        CHECKPOINT_RUN_MODELS,
+        epoch_to_load,
+        generators,
+        generator_optimizers,
+        discriminators,
+        discriminator_optimizers,
+        aux_regs,
+        aux_reg_optimizers,
+        router_network,
+        router_optimizer,
+        device=device
+    )
 
     def generator_train_step(generator, discriminator, a_reg, cond, g_optimizer, a_optimizer, criterion,
                              true_positions, std, intensity, class_counts, BATCH_SIZE):
@@ -168,9 +153,7 @@ for _ in range(N_RUNS):
         g_optimizer.zero_grad()
 
         noise = torch.randn(BATCH_SIZE, NOISE_DIM, device=device)
-        # noise.requires_grad = False
         noise_2 = torch.randn(BATCH_SIZE, NOISE_DIM, device=device)
-        # noise_2.requires_grad = False
 
         # generate fake images
         fake_images = generator(noise, cond)
@@ -196,9 +179,9 @@ for _ in range(N_RUNS):
         a_optimizer.zero_grad()
         generated_positions = a_reg(fake_images)
 
-        aux_reg_loss = aux_reg_criterion(true_positions, generated_positions, scaler_poz, AUX_STRENGTH)
+        aux_reg_loss = aux_reg_criterion(true_positions, generated_positions, scaler_poz)
 
-        gen_loss += aux_reg_loss
+        gen_loss += aux_reg_loss*AUX_STRENGTH
 
         gen_loss.backward()
         g_optimizer.param_groups[0]['lr'] = LR_G * class_counts.clone().detach()
@@ -212,7 +195,6 @@ for _ in range(N_RUNS):
     def discriminator_train_step(disc, generator, d_optimizer, criterion, real_images, cond, BATCH_SIZE) -> np.float32:
         """Returns Python float of disc_loss value"""
         # Train discriminator
-        noise = torch.randn(BATCH_SIZE, NOISE_DIM, device=device)
 
         d_optimizer.zero_grad()
 
@@ -222,8 +204,9 @@ for _ in range(N_RUNS):
         loss_real_disc = criterion(real_output, real_labels)
 
         # calculate loss for generated images
+        noise = torch.randn(BATCH_SIZE, NOISE_DIM, device=device)
         fake_images = generator(noise, cond)
-        fake_output, fake_latent = disc(fake_images, cond)
+        fake_output, fake_latent = disc(fake_images.detach(), cond)
         fake_labels = torch.zeros_like(fake_output)
         loss_fake_disc = criterion(fake_output, fake_labels)
 
@@ -296,8 +279,10 @@ for _ in range(N_RUNS):
             selected_intensity = intensity[selected_indices]
             selected_std = std[selected_indices]
             selected_generator = generators[i]
+            selected_generator_optimizer = generator_optimizers[i]
             selected_discriminator = discriminators[i]
             selected_aux_reg = aux_regs[i]
+            selected_aux_reg_optimizer = aux_reg_optimizers[i]
             selected_class_counts = class_counts_adjusted[i]
 
             gen_loss, div_loss, intensity_loss, \
@@ -305,8 +290,8 @@ for _ in range(N_RUNS):
                                                                                                  selected_discriminator,
                                                                                                  selected_aux_reg,
                                                                                                  selected_cond,
-                                                                                                 generator_optimizers[i],
-                                                                                                 aux_reg_optimizers[i],
+                                                                                                 selected_generator_optimizer,
+                                                                                                 selected_aux_reg_optimizer,
                                                                                                  binary_cross_entropy_criterion,
                                                                                                  selected_true_positions,
                                                                                                  selected_std,
@@ -327,19 +312,27 @@ for _ in range(N_RUNS):
         #
         if N_EXPERTS > 1:
             gan_loss_scaled = (gen_losses.mean()+disc_losses.mean()) * GEN_STRENGTH  #  Added that on 06.01.25
-            expert_entropy_loss = calculate_expert_utilization_entropy(predicted_expert_one_hot.clone(), UTIL_STRENGTH) if UTIL_STRENGTH != 0. else torch.tensor(0.0)
+            expert_entropy_loss = calculate_expert_utilization_entropy(predicted_expert_one_hot.clone(), UTIL_STRENGTH) if UTIL_STRENGTH != 0 else torch.tensor(0.0,
+                                                                                                                                                                requires_grad=False,
+                                                                                                                                                                device=predicted_expert_one_hot.device)
 
             expert_distribution_loss = calculate_expert_distribution_loss(predicted_expert_one_hot.clone(),
                                                                           mean_intensities_in_batch_expert.reshape(-1, 1),
-                                                                          ED_STRENGTH) if ED_STRENGTH != 0. else torch.tensor(0.0)
+                                                                          ED_STRENGTH) if ED_STRENGTH != 0. else torch.tensor(0.0, requires_grad=False)
 
             # Compute differentiation loss for all experts
-            differentiation_loss = sum(
+            differentiation_loss_intensities = sum(
                 np.abs((mean_intensities_experts[i] - mean_intensities_experts[j]))
                 for i, j in combinations(range(N_EXPERTS), 2)  # Generate all unique pairs of experts
             ) if DIFF_STRENGTH != 0. else torch.tensor(0.0)
+            differentiation_loss_stds = sum(
+                np.abs((std_intensities_experts[i] - std_intensities_experts[j]))
+                for i, j in combinations(range(N_EXPERTS), 2)  # Generate all unique pairs of experts
+            ) if DIFF_STRENGTH != 0. else torch.tensor(0.0)
+
             # differentiation_loss = torch.clamp(torch.tensor(differentiation_loss, device=device), min=CLIP_DIFF_LOSS)
-            differentiation_loss = differentiation_loss * DIFF_STRENGTH
+            differentiation_loss = (differentiation_loss_intensities+differentiation_loss_stds) * DIFF_STRENGTH
+
             router_loss = gan_loss_scaled + expert_distribution_loss - expert_entropy_loss - differentiation_loss
 
             if epoch < STOP_ROUTER_TRAINING_EPOCH:
@@ -408,7 +401,7 @@ for _ in range(N_RUNS):
                 for i in range(N_EXPERTS):
                     n_chosen_experts[i].append(n_chosen_experts_batch[i])
                     mean_intensities_experts[i].append(mean_intensities_experts_batch[i])
-                    std_intensities_experts[i] = np.sqrt(np.mean(std_intensities_experts_batch[i] ** 2))
+                    std_intensities_experts[i] = np.mean(std_intensities_experts_batch[i])
 
             # when router stops training, choose the expert with the highest mean intensity
             # if epoch == STOP_ROUTER_TRAINING_EPOCH:
@@ -459,7 +452,7 @@ for _ in range(N_RUNS):
 
             y_test_experts = [y_test[indices_experts[i]] for i in range(N_EXPERTS)]
             # Calculate WS distance across all distribution
-            ws_mean, ws_std, ws_mean_exp = calculate_joint_ws_across_experts(
+            ws_mean, ws_std, ws_mean_exp, ws_std_exp = calculate_joint_ws_across_experts(
                 min(epoch // 5 + 1, 5),
                 [x_test[indices_experts[i]] for i in range(N_EXPERTS)],
                 y_test_experts,
@@ -482,6 +475,7 @@ for _ in range(N_RUNS):
             # Log to WandB tool
             log_data = {
                 'ws_mean': ws_mean,
+                'ws_std': ws_std,
                 'div_loss': np.mean(div_loss_epoch),
                 'intensity_loss': np.mean(intensity_loss_epoch),
                 'router_loss': np.mean(router_loss_epoch),
@@ -497,6 +491,7 @@ for _ in range(N_RUNS):
             disc_losses_epoch = np.mean(np.array(disc_losses_epoch), axis=0)
             for i in range(N_EXPERTS):
                 log_data[f"ws_mean_{i}"] = ws_mean_exp[i]
+                log_data[f"ws_std_{i}"] = ws_std_exp[i]
                 log_data[f"gen_loss_{i}"] = gen_losses_epoch[i]
                 log_data[f"disc_loss_{i}"] = disc_losses_epoch[i]
                 log_data[f"std_intensities_experts_{i}"] = np.mean(std_intensities_experts[i])
@@ -521,16 +516,17 @@ for _ in range(N_RUNS):
             # log_data[f"cond_projection"] = wandb.Image(cond_projections)
 
             # Plot the cond expert specialization
-            cond_expert_specialization = plot_expert_heatmap(y_test, indices_experts, epoch, data_cond_names)
-            log_data[f"cond_expert_specialization"] = wandb.Image(cond_expert_specialization)
+            # cond_expert_specialization = plot_expert_heatmap(y_test, indices_experts, epoch, data_cond_names)
+            # log_data[f"cond_expert_specialization"] = wandb.Image(cond_expert_specialization)
 
             wandb.log(log_data)
 
             # save models if all generators pass threshold
             if ws_mean < WS_MEAN_SAVE_THRESHOLD:
-                save_models(filepath_models, N_EXPERTS, aux_regs, aux_reg_optimizers,
-                            generators, generator_optimizers, discriminators, discriminator_optimizers,
-                            router_network, router_optimizer, epoch)
+                save_models_and_architectures(filepath_models, N_EXPERTS, aux_regs, aux_reg_optimizers,
+                                              generators, generator_optimizers, discriminators,
+                                              discriminator_optimizers,
+                                              router_network, router_optimizer, epoch)
 
             print(f'Time for epoch {epoch} is {epoch_time:.2f} sec')
 
@@ -586,7 +582,7 @@ for _ in range(N_RUNS):
                              #                                      batch_size=BATCH_SIZE))
 
     wandb.finish()
-    wandb.init(
+    run = wandb.init(
         project="Generative-DNN-for-CERN-Fast-Simulations",
         entity="bedkowski-patrick",
         name=wandb_run_name,
@@ -597,5 +593,6 @@ for _ in range(N_RUNS):
               f"proton_max_{photon_sum_proton_max}",
               "sdi_gan_intensity"]
     )
+    run.log_code(name="expertsim_proton.py")
 
     history = train(train_loader, EPOCHS, y_test)

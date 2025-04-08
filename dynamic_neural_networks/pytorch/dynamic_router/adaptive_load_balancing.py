@@ -40,9 +40,9 @@ SAVE_EXPERIMENT_DATA = True
 PLOT_IMAGES = True
 
 # SETTINGS & PARAMETERS
-WS_MEAN_SAVE_THRESHOLD = 3.5
+WS_MEAN_SAVE_THRESHOLD = 3
 DI_STRENGTH = 0.1
-IN_STRENGTH = 1e-3  #0.001
+IN_STRENGTH = 1e-3  # 0.001
 IN_STRENGTH_LOWER_VAL = 0.001  # 0.000001
 AUX_STRENGTH = 0.001
 
@@ -64,7 +64,7 @@ ED_STRENGTH = 0 #0.01  # Strength on the expert distribution loss in the router 
 GEN_STRENGTH = 1e-1  # Strength on the generator loss in the router loss calculation
 DIFF_STRENGTH = 1e-5  # Differentation on the generator loss in the router loss calculation
 UTIL_STRENGTH = 0  #  1e-4  # Strength on the expert utilization entropy in the router loss calculation
-ALB_STRENGTH = 1e-5  # 1e-3  #1e-4  # Strength on the adaptive load balancing in the router loss calculation
+ALB_STRENGTH = 1e-3  # 1e-3  #1e-4  # Strength on the adaptive load balancing in the router loss calculation
 STOP_ROUTER_TRAINING_EPOCH = EPOCHS
 CLIP_DIFF_LOSS = "No-clip" #-1.0
 
@@ -76,10 +76,12 @@ INPUT_IMAGE_SHAPE = (56, 30)
 MIN_PROTON_THRESHOLD = 1
 
 CHECKPOINT_DATA_INDICES_FILE = None
-CHECKPOINT_RUN_MODELS = None  #"/net/tscratch/people/plgpbedkowski/dynamic_neural_networks/experiments/experiments/test_adaptive_load_balancing_0.0001_0_0.1_0_0.0001_1e-05_0.001_21_02_2025_16_27_09_5_2312_21_02_2025_16_27_09/models"
-epoch_to_load = None  #149
+CHECKPOINT_RUN_MODELS = None  #r"/net/tscratch/people/plgpbedkowski/dynamic_neural_networks/experiments/test_single_disc_scaled_LR_disc_alb_loss_0.0001_1e-05_0.001_22_03_2025_07_20_19_762_1_2312_22_03_2025_07_20_19_762/models"
+epoch_to_load = None  #
 
-NAME = f"test_attention_router_entropy_loss_{ALB_STRENGTH}_{ED_STRENGTH}_{GEN_STRENGTH}_{UTIL_STRENGTH}"
+# NAME = f"test_continue_adaptive_load_balancing_detach"
+NAME = f"test_single_disc_alb_loss_continue_the_best"
+
 # NAME = f"no_entropy_min_{MIN_PROTON_THRESHOLD}_ijcai2025_proton_{ED_STRENGTH}_{GEN_STRENGTH}_{UTIL_STRENGTH}"
 
 # NAME = f"diff_with_intensitiy_and_std_ijcai2025_proton_{ED_STRENGTH}_{GEN_STRENGTH}_{UTIL_STRENGTH}"
@@ -100,6 +102,7 @@ for _ in range(N_RUNS):
     data_posi = data_posi.loc[data_cond_idx].reset_index(drop=True)
 
     photon_sum_proton_min, photon_sum_proton_max = data_cond.proton_photon_sum.min(), data_cond.proton_photon_sum.max()
+    print(data_posi)
     print('Loaded positions: ', data_posi.shape, "max:", data_posi.values.max(), "min:", data_posi.values.min())
 
     DATE_STR = datetime.now().strftime("%d_%m_%Y_%H_%M_%S_%f")[:-3]
@@ -116,7 +119,7 @@ for _ in range(N_RUNS):
         EXPERIMENT_DIR_NAME,
         ZDCType.PROTON,
         SAVE_EXPERIMENT_DATA,
-        checkpoint_data_load_file=CHECKPOINT_DATA_INDICES_FILE)
+        load_data_file_from_checkpoint=CHECKPOINT_DATA_INDICES_FILE)
 
     # CALCULATE DISTRIBUTION OF CHANNELS IN ORIGINAL TEST DATA #
     org = np.exp(x_test) - 1
@@ -150,14 +153,12 @@ for _ in range(N_RUNS):
         )
 
     def generator_train_step(generator, discriminator, a_reg, cond, g_optimizer, a_optimizer, criterion,
-                             true_positions, std, intensity, class_counts, BATCH_SIZE):
+                             true_positions, std, intensity, class_counts, batch_size):
         # Train Generator
         g_optimizer.zero_grad()
 
-        noise = torch.randn(BATCH_SIZE, NOISE_DIM, device=device)
-        # noise.requires_grad = False
-        noise_2 = torch.randn(BATCH_SIZE, NOISE_DIM, device=device)
-        # noise_2.requires_grad = False
+        noise = torch.randn(batch_size, NOISE_DIM, device=device)
+        noise_2 = torch.randn(batch_size, NOISE_DIM, device=device)
 
         # generate fake images
         fake_images = generator(noise, cond)
@@ -196,10 +197,9 @@ for _ in range(N_RUNS):
                mean_intenisties
 
 
-    def discriminator_train_step(disc, generator, d_optimizer, criterion, real_images, cond, BATCH_SIZE) -> np.float32:
+    def discriminator_train_step(disc, generator, d_optimizer, criterion, real_images, cond, class_counts, batch_size) -> np.float32:
         """Returns Python float of disc_loss value"""
         # Train discriminator
-        noise = torch.randn(BATCH_SIZE, NOISE_DIM, device=device)
 
         d_optimizer.zero_grad()
 
@@ -209,14 +209,17 @@ for _ in range(N_RUNS):
         loss_real_disc = criterion(real_output, real_labels)
 
         # calculate loss for generated images
+        noise = torch.randn(batch_size, NOISE_DIM, device=device)
         fake_images = generator(noise, cond)
-        fake_output, fake_latent = disc(fake_images, cond)
+        fake_output, fake_latent = disc(fake_images.detach(), cond)
         fake_labels = torch.zeros_like(fake_output)
         loss_fake_disc = criterion(fake_output, fake_labels)
 
         # Accumulate and compute discriminator loss
         disc_loss = loss_real_disc + loss_fake_disc
         disc_loss.backward()  # call backward computations on accumulated gradients for efficiency
+
+        # d_optimizer.param_groups[0]['lr'] = LR_D * class_counts
         d_optimizer.step()
         return disc_loss.item()
 
@@ -259,14 +262,15 @@ for _ in range(N_RUNS):
             # Clone or detach tensors to avoid in-place modifications
             selected_cond = cond[selected_indices]
             selected_generator = generators[i]
-            selected_discriminator = discriminators[i]
-            selected_discriminator_optimizer = discriminator_optimizers[i]
+            selected_discriminator = discriminators[0]  # always take first discriminator
+            selected_discriminator_optimizer = discriminator_optimizers[0]  # always take first discriminator
             selected_real_images = real_images[selected_indices]
+            selected_class_counts = class_counts_adjusted[i]
 
             disc_loss = discriminator_train_step(selected_discriminator, selected_generator,
                                                  selected_discriminator_optimizer,
                                                  binary_cross_entropy_criterion, selected_real_images,
-                                                 selected_cond, BATCH_SIZE)
+                                                 selected_cond, selected_class_counts, BATCH_SIZE)
             disc_losses[i] = disc_loss
 
         #
@@ -283,8 +287,10 @@ for _ in range(N_RUNS):
             selected_intensity = intensity[selected_indices]
             selected_std = std[selected_indices]
             selected_generator = generators[i]
-            selected_discriminator = discriminators[i]
+            selected_generator_optimizer = generator_optimizers[i]
+            selected_discriminator = discriminators[0]
             selected_aux_reg = aux_regs[i]
+            selected_aux_reg_optimizer = aux_reg_optimizers[i]
             selected_class_counts = class_counts_adjusted[i]
 
             gen_loss, div_loss, intensity_loss, \
@@ -292,8 +298,8 @@ for _ in range(N_RUNS):
                                                                                                  selected_discriminator,
                                                                                                  selected_aux_reg,
                                                                                                  selected_cond,
-                                                                                                 generator_optimizers[i],
-                                                                                                 aux_reg_optimizers[i],
+                                                                                                 selected_generator_optimizer,
+                                                                                                 selected_aux_reg_optimizer,
                                                                                                  binary_cross_entropy_criterion,
                                                                                                  selected_true_positions,
                                                                                                  selected_std,
@@ -339,7 +345,7 @@ for _ in range(N_RUNS):
             # print("Routing scores:")
             # print(routing_scores)
             # print("-------------------------")
-            alb_loss = calculate_adaptive_load_balancing_loss(routing_scores, ALB_STRENGTH)
+            alb_loss = calculate_adaptive_load_balancing_loss(routing_scores, ALB_STRENGTH) if ALB_STRENGTH != 0. else torch.tensor(0.0)
 
             router_loss = gan_loss_scaled + expert_distribution_loss - expert_entropy_loss - differentiation_loss + alb_loss
 
@@ -596,7 +602,7 @@ for _ in range(N_RUNS):
                              #                                      batch_size=BATCH_SIZE))
 
     wandb.finish()
-    wandb.init(
+    run = wandb.init(
         project="Generative-DNN-for-CERN-Fast-Simulations",
         entity="bedkowski-patrick",
         name=wandb_run_name,
@@ -607,5 +613,6 @@ for _ in range(N_RUNS):
               f"proton_max_{photon_sum_proton_max}",
               "sdi_gan_intensity"]
     )
+    run.log_code(name="adaptive_load_balancing.py")
 
     history = train(train_loader, EPOCHS, y_test)

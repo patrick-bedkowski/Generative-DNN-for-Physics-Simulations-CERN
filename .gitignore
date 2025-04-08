@@ -25,3 +25,8 @@ images/
 /notebooks/vae_proton_15_2312/
 /slurm-outputs/
 /dynamic_neural_networks/pytorch/dynamic_router/myenv_cp/
+*.csv
+*.png
+*.pth
+*.npy
+*.sh

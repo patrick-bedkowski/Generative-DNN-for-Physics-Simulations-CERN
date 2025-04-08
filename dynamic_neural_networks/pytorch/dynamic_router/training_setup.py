@@ -149,69 +149,120 @@ def load_checkpoint_weights(checkpoint_dir,
         router_optimizer (torch.optim.Optimizer): Router network optimizer.
         device (str): Device to load the weights onto.
     """
-    # Load generator weights and optimizers
-    for i, (generator, gen_opt) in enumerate(zip(generators, generator_optimizers)):
+    # --------- Load Generators (full models) and update optimizers ---------
+    for i, gen_opt in enumerate(generator_optimizers):
         gen_file = os.path.join(checkpoint_dir, f"gen_{i}_{epoch}.pth")
         gen_opt_file = os.path.join(checkpoint_dir, f"gen_optim_{i}_{epoch}.pth")
 
         if os.path.exists(gen_file):
-            print(f"Loading generator {i} weights from {gen_file}")
-            generator.load_state_dict(torch.load(gen_file, map_location=device))
+            print(f"Loading generator {i} model from {gen_file}")
+            try:
+                # Load the entire generator object (not just a state_dict)
+                loaded_generator = torch.load(gen_file, map_location=device)
+                generators[i] = loaded_generator  # replace with loaded model
+
+                # Since the optimizer was referencing the old model’s parameters,
+                # update every parameter group to use the new ones.
+                for group in gen_opt.param_groups:
+                    group["params"] = list(loaded_generator.parameters())
+            except Exception as e:
+                print(f"Error loading generator {i} model from {gen_file}: {e}")
         else:
-            print(f"Generator {i} weights not found for epoch {epoch}")
+            print(f"Generator {i} model not found for epoch {epoch}")
 
         if os.path.exists(gen_opt_file):
             print(f"Loading generator {i} optimizer state from {gen_opt_file}")
-            gen_opt.load_state_dict(torch.load(gen_opt_file, map_location=device))
+            try:
+                # Open the file in binary mode to avoid zip archive issues.
+                with open(gen_opt_file, "rb") as f:
+                    optimizer_state = torch.load(f, map_location=device)
+                gen_opt.load_state_dict(optimizer_state)
+            except Exception as e:
+                print(f"Error loading generator {i} optimizer state from {gen_opt_file}: {e}")
         else:
             print(f"Generator {i} optimizer state not found for epoch {epoch}")
 
-    # Load discriminator weights and optimizers
-    for i, (discriminator, disc_opt) in enumerate(zip(discriminators, discriminator_optimizers)):
+    # --------- Load Discriminators (full models) and update optimizers ---------
+    for i, disc_opt in enumerate(discriminator_optimizers):
         disc_file = os.path.join(checkpoint_dir, f"disc_{i}_{epoch}.pth")
         disc_opt_file = os.path.join(checkpoint_dir, f"disc_optim_{i}_{epoch}.pth")
 
         if os.path.exists(disc_file):
-            print(f"Loading discriminator {i} weights from {disc_file}")
-            discriminator.load_state_dict(torch.load(disc_file, map_location=device))
+            print(f"Loading discriminator {i} model from {disc_file}")
+            try:
+                loaded_disc = torch.load(disc_file, map_location=device)
+                discriminators[i] = loaded_disc
+                for group in disc_opt.param_groups:
+                    group["params"] = list(loaded_disc.parameters())
+            except Exception as e:
+                print(f"Error loading discriminator {i} model from {disc_file}: {e}")
         else:
-            print(f"Discriminator {i} weights not found for epoch {epoch}")
+            print(f"Discriminator {i} model not found for epoch {epoch}")
 
         if os.path.exists(disc_opt_file):
             print(f"Loading discriminator {i} optimizer state from {disc_opt_file}")
-            disc_opt.load_state_dict(torch.load(disc_opt_file, map_location=device))
+            try:
+                with open(disc_opt_file, "rb") as f:
+                    optimizer_state = torch.load(f, map_location=device)
+                disc_opt.load_state_dict(optimizer_state)
+            except Exception as e:
+                print(f"Error loading discriminator {i} optimizer state from {disc_opt_file}: {e}")
         else:
             print(f"Discriminator {i} optimizer state not found for epoch {epoch}")
 
-    # Load auxiliary regularizers and optimizers
-    for i, (aux_reg, aux_opt) in enumerate(zip(aux_regs, aux_reg_optimizers)):
+    # --------- Load Auxiliary Regularizers (full models) and update optimizers ---------
+    for i, aux_opt in enumerate(aux_reg_optimizers):
         aux_file = os.path.join(checkpoint_dir, f"aux_reg_{i}_{epoch}.pth")
         aux_opt_file = os.path.join(checkpoint_dir, f"aux_reg_optim_{i}_{epoch}.pth")
 
         if os.path.exists(aux_file):
-            print(f"Loading Aux Reg {i} weights from {aux_file}")
-            aux_reg.load_state_dict(torch.load(aux_file, map_location=device))
+            print(f"Loading auxiliary regularizer {i} model from {aux_file}")
+            try:
+                loaded_aux = torch.load(aux_file, map_location=device)
+                aux_regs[i] = loaded_aux
+                for group in aux_opt.param_groups:
+                    group["params"] = list(loaded_aux.parameters())
+            except Exception as e:
+                print(f"Error loading auxiliary regularizer {i} model from {aux_file}: {e}")
         else:
-            print(f"Aux Reg {i} weights not found for epoch {epoch}")
+            print(f"Auxiliary regularizer {i} model not found for epoch {epoch}")
 
         if os.path.exists(aux_opt_file):
-            print(f"Loading Aux Reg {i} optimizer state from {aux_opt_file}")
-            aux_opt.load_state_dict(torch.load(aux_opt_file, map_location=device))
+            print(f"Loading auxiliary regularizer {i} optimizer state from {aux_opt_file}")
+            try:
+                with open(aux_opt_file, "rb") as f:
+                    optimizer_state = torch.load(f, map_location=device)
+                aux_opt.load_state_dict(optimizer_state)
+            except Exception as e:
+                print(f"Error loading auxiliary regularizer {i} optimizer state from {aux_opt_file}: {e}")
         else:
-            print(f"Aux Reg {i} optimizer state not found for epoch {epoch}")
+            print(f"Auxiliary regularizer {i} optimizer state not found for epoch {epoch}")
 
-    # Load router network weights and optimizer
+    # --------- Load Router Network (full model) and update its optimizer ---------
     router_file = os.path.join(checkpoint_dir, f"router_network_{epoch}.pth")
     router_opt_file = os.path.join(checkpoint_dir, f"router_network_optim_{epoch}.pth")
 
     if os.path.exists(router_file):
-        print(f"Loading router network weights from {router_file}")
-        router_network.load_state_dict(torch.load(router_file, map_location=device))
+        print(f"Loading router network model from {router_file}")
+        try:
+            loaded_router = torch.load(router_file, map_location=device)
+            # Update in-place so that references to router_network remain valid.
+            router_network.__dict__.update(loaded_router.__dict__)
+        except Exception as e:
+            print(f"Error loading router network model from {router_file}: {e}")
     else:
-        print(f"Router network weights not found for epoch {epoch}")
+        print(f"Router network model not found for epoch {epoch}")
 
     if os.path.exists(router_opt_file):
         print(f"Loading router optimizer state from {router_opt_file}")
-        router_optimizer.load_state_dict(torch.load(router_opt_file, map_location=device))
+        try:
+            with open(router_opt_file, "rb") as f:
+                optimizer_state = torch.load(f, map_location=device)
+            # Update the optimizer’s parameter groups to refer to the (updated) router_network.
+            for group in router_optimizer.param_groups:
+                group["params"] = list(router_network.parameters())
+            router_optimizer.load_state_dict(optimizer_state)
+        except Exception as e:
+            print(f"Error loading router optimizer state from {router_opt_file}: {e}")
     else:
         print(f"Router optimizer state not found for epoch {epoch}")

@@ -295,14 +295,14 @@ def regressor_loss(real_coords, fake_coords, scaler_poz):
     # real_coords = real_coords.to(fake_coords.device)
 
     # Use in-place scaling if the scaler provides the scale and mean attributes
-    scale = torch.tensor(scaler_poz.scale_, device=fake_coords.device, dtype=torch.float32)
-    mean = torch.tensor(scaler_poz.mean_, device=fake_coords.device, dtype=torch.float32)
-    #
-    # Scale fake_coords directly using PyTorch operations
-    fake_coords_scaled = (fake_coords - mean) / scale
+    # scale = torch.tensor(scaler_poz.scale_, device=fake_coords.device, dtype=torch.float32)
+    # mean = torch.tensor(scaler_poz.mean_, device=fake_coords.device, dtype=torch.float32)
+    # #
+    # # Scale fake_coords directly using PyTorch operations
+    # fake_coords_scaled = (fake_coords - mean) / scale
 
     # Compute the MAE loss
-    return F.mse_loss(fake_coords_scaled, real_coords)
+    return F.mse_loss(fake_coords, real_coords)
 
 
 def calculate_ws_ch_proton_model(n_calc, x_test, y_test, generator,

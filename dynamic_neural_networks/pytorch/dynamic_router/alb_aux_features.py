@@ -42,7 +42,7 @@ SAVE_EXPERIMENT_DATA = False
 PLOT_IMAGES = True
 
 # SETTINGS & PARAMETERS
-WS_MEAN_SAVE_THRESHOLD = 5
+WS_MEAN_SAVE_THRESHOLD = 1
 DI_STRENGTH = 0.1
 IN_STRENGTH = 1e-3  # 0.001
 IN_STRENGTH_LOWER_VAL = 0.001  # 0.000001
@@ -64,7 +64,7 @@ LR_R = 1e-3
 # Router loss parameters
 ED_STRENGTH = 0 #0.01  # Strength on the expert distribution loss in the router loss calculation
 GEN_STRENGTH = 1e-1  # Strength on the generator loss in the router loss calculation
-DIFF_STRENGTH = 1e-3  # Differentation on the generator loss in the router loss calculation
+DIFF_STRENGTH = 1e-4  # Differentation on the generator loss in the router loss calculation
 UTIL_STRENGTH = 0  #  1e-4  # Strength on the expert utilization entropy in the router loss calculation
 ALB_STRENGTH = 1e-4  # 1e-3  #1e-4  # Strength on the adaptive load balancing in the router loss calculation
 STOP_ROUTER_TRAINING_EPOCH = EPOCHS
@@ -86,7 +86,7 @@ CHECKPOINT_DATA_INDICES_FILE = None
 CHECKPOINT_RUN_MODELS = None  #"/net/tscratch/people/plgpbedkowski/dynamic_neural_networks/experiments/experiments/test_adaptive_load_balancing_0.0001_0_0.1_0_0.0001_1e-05_0.001_21_02_2025_16_27_09_5_2312_21_02_2025_16_27_09/models"
 epoch_to_load = None  #149
 
-NAME = f"test_alb_aux_different_gen_train_st"
+NAME = f"test_alb_aux_different_gen_train"
 disc_type_features = 'conv'
 
 for _ in range(N_RUNS):
@@ -208,7 +208,6 @@ for _ in range(N_RUNS):
 
         # Train auxiliary regressor
         a_optimizer.zero_grad()
-        print("fake iamges shape", fake_images.shape)
         generated_positions = a_reg(fake_images)
 
         aux_reg_loss = aux_reg_criterion(true_positions, generated_positions, scaler_poz)
@@ -238,7 +237,7 @@ for _ in range(N_RUNS):
         # a_optimizer.param_groups[0]['lr'] = LR_A * class_counts.clone().detach()
         # a_optimizer.step()
 
-        aux_reg_features = a_reg.get_features(fake_images.clone().detach()).detach()  # detach to prevent generator ipdate
+        aux_reg_features = a_reg.get_features(fake_images.clone().detach())
         return gen_loss.data, div_loss.data, intensity_loss.data, aux_reg_loss.data, std_intensity, mean_intensity,\
                mean_intenisties, aux_reg_features
 
@@ -330,7 +329,7 @@ for _ in range(N_RUNS):
             if selected_indices.numel() <= 1:
                 gen_losses[i] = torch.tensor(0.0, requires_grad=True).to(device)
                 feature_shape_aux_conv_channels = 256
-                aux_reg_features_experts.append(torch.zeros((1, feature_shape_aux_conv_channels), requires_grad=False).to(device))
+                aux_reg_features_experts.append(torch.zeros((1, feature_shape_aux_conv_channels), requires_grad=True).to(device))
                 continue
 
             selected_cond = cond[selected_indices]
@@ -394,14 +393,15 @@ for _ in range(N_RUNS):
                     feature_means = [feat.mean(0, keepdim=True) for feat in aux_reg_features_experts]
                     # feature_vars = [feat.var(dim=0) for feat in aux_reg_features_experts]
 
+                # test to optimize experts, not router
 
                 # print("shape means", feature_means[0].shape)
                 # print("shape vars", feature_vars[0].shape)
 
                 for i, j in combinations(range(num_experts), 2):
                     # Reattach to computation graph only for final loss calculation
-                    mean_i = feature_means[i].detach().requires_grad_(True)
-                    mean_j = feature_means[j].detach().requires_grad_(True)
+                    mean_i = feature_means[i]
+                    mean_j = feature_means[j]
 
                     # var_i = feature_vars[i].detach().requires_grad_(True)
                     # var_j = feature_vars[j].detach().requires_grad_(True)
@@ -409,12 +409,16 @@ for _ in range(N_RUNS):
                     # cos_diss_vars = 1- F.cosine_similarity(mean_i, mean_j)
                     # dissimilarity = 0.8*cos_diss_means + 0.2*cos_diss_vars
 
-                    dissimilarity = 1- F.cosine_similarity(mean_i, mean_j)
+                    cosine_similarity = F.cosine_similarity(mean_i, mean_j)
+                    # -1: vectors dissimilar
+                    # 0: vectors orthogonal
+                    # 1: vectors
+                    dissimilarity = torch.abs(cosine_similarity)
                     loss += dissimilarity
                 return loss
 
             differentiation_loss = compute_differentiation_loss(aux_reg_features_experts) if DIFF_STRENGTH != 0. else torch.tensor(0.0)
-            # differentiation_loss = differentiation_loss * DIFF_STRENGTH
+            differentiation_loss = differentiation_loss * DIFF_STRENGTH
             # OLD BASED ON MEAN PHOTONSUMS
             # Compute differentiation loss for all experts
             # differentiation_loss_intensities = sum(
@@ -431,7 +435,8 @@ for _ in range(N_RUNS):
             routing_scores = predicted_expert_one_hot.sum(dim=0)
             alb_loss = calculate_adaptive_load_balancing_loss(routing_scores, ALB_STRENGTH) if ALB_STRENGTH != 0. else torch.tensor(0.0)
 
-            router_loss = gan_loss_scaled + expert_distribution_loss - expert_entropy_loss - differentiation_loss + alb_loss
+            # na pewno musi byc detach
+            router_loss = gan_loss_scaled + expert_distribution_loss - expert_entropy_loss + differentiation_loss + alb_loss
 
             if epoch < STOP_ROUTER_TRAINING_EPOCH:
                 # Train Router Network

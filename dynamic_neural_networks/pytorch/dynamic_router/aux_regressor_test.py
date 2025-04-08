@@ -28,108 +28,8 @@ from utils import (sum_channels_parallel, calculate_ws_ch_proton_model,
                    StratifiedBatchSampler, plot_cond_pca_tsne, plot_expert_heatmap,
                    calculate_adaptive_load_balancing_loss)
 
-import optuna
-from optuna import Trial
-from optuna.samplers import TPESampler
-
-### OPTUNA
-# Modified Feature Extractor with architecture search
-class NASFeatureExtractor(nn.Module):
-    def __init__(self, trial: Trial):
-        super(NASFeatureExtractor, self).__init__()
-        self.layers = nn.ModuleList()
-
-        # Architecture search parameters
-        n_conv_layers = trial.suggest_int('n_conv_layers', 1, 4)
-        pool_options = ['max', 'avg', 'none']
-        activation_fns = ['leaky_relu', 'relu', 'elu']
-
-        in_channels = 1
-        for i in range(n_conv_layers):
-            # Suggest layer parameters
-            out_channels = trial.suggest_int(f'conv_{i}_channels', 16, 128, step=16)
-            kernel_size = trial.suggest_int(f'conv_{i}_kernel', 3, 7, step=2)
-            use_bn = trial.suggest_categorical(f'conv_{i}_bn', [True, False])
-            activation = trial.suggest_categorical(f'conv_{i}_activation', activation_fns)
-            pool_type = trial.suggest_categorical(f'conv_{i}_pool', pool_options)
-            dropout_rate = trial.suggest_float(f'conv_{i}_dropout', 0.0, 0.5, step=0.1)
-
-            # Build convolutional block
-            self.layers.append(nn.Conv2d(in_channels, out_channels, kernel_size, padding=kernel_size // 2))
-
-            if use_bn:
-                self.layers.append(nn.BatchNorm2d(out_channels))
-
-            # Add activation
-            if activation == 'leaky_relu':
-                self.layers.append(nn.LeakyReLU(0.1))
-            elif activation == 'relu':
-                self.layers.append(nn.ReLU())
-            else:
-                self.layers.append(nn.ELU())
-
-            # Add pooling
-            if pool_type == 'max':
-                self.layers.append(nn.MaxPool2d(2))
-            elif pool_type == 'avg':
-                self.layers.append(nn.AvgPool2d(2))
-
-            # Add dropout
-            if dropout_rate > 0:
-                self.layers.append(nn.Dropout2d(dropout_rate))
-
-            in_channels = out_channels
-
-    def forward(self, x):
-        for layer in self.layers:
-            x = layer(x)
-        return x.mean([2, 3])  # Global average pooling
-
-
-# Modified Regressor with architecture search
-class NASRegressor(nn.Module):
-    def __init__(self, trial: Trial, feature_dim: int):
-        super(NASRegressor, self).__init__()
-        self.layers = nn.ModuleList()
-
-        # Regressor architecture search
-        n_hidden_layers = trial.suggest_int('n_reg_layers', 1, 3)
-        activation_fns = ['relu', 'leaky_relu', 'selu']
-
-        in_features = feature_dim
-        for i in range(n_hidden_layers):
-            out_features = trial.suggest_int(f'reg_{i}_units', 64, 512, step=64)
-            dropout_rate = trial.suggest_float(f'reg_{i}_dropout', 0.0, 0.5, step=0.1)
-            activation = trial.suggest_categorical(f'reg_{i}_activation', activation_fns)
-            use_bn = trial.suggest_categorical(f'reg_{i}_bn', [True, False])
-
-            self.layers.append(nn.Linear(in_features, out_features))
-
-            if use_bn:
-                self.layers.append(nn.BatchNorm1d(out_features))
-
-            if activation == 'leaky_relu':
-                self.layers.append(nn.LeakyReLU(0.1))
-            elif activation == 'relu':
-                self.layers.append(nn.ReLU())
-            else:
-                self.layers.append(nn.SELU())
-
-            if dropout_rate > 0:
-                self.layers.append(nn.Dropout(dropout_rate))
-
-            in_features = out_features
-
-        self.output = nn.Linear(in_features, 2)
-
-    def forward(self, x):
-        for layer in self.layers:
-            x = layer(x)
-        return self.output(x)
-
 
 LR_AUX = 1e-3
-
 
 
 # Feature Extractor based on previous discriminator architecture
@@ -187,10 +87,7 @@ class AuxiliaryRegressor(nn.Module):
 
     @staticmethod
     def regressor_loss(real_coords, fake_coords):
-        # Ensure real_coords and fake_coords are on the same device
-        # real_coords = real_coords.to(fake_coords.device)
-
-        # Compute the MAE loss
+        # Compute the MSE loss
         return F.mse_loss(fake_coords, real_coords)
 
 

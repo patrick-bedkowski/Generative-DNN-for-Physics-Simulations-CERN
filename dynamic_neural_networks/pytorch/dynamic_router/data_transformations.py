@@ -117,9 +117,9 @@ def transform_data_for_training(data_cond, data, data_posi, EXPERIMENT_DIR_NAME,
         print("Data shapes:", x_train.shape, x_test.shape, y_train.shape, y_test.shape)
     elif zdc_type == ZDCType.NEUTRON:
         x_train, x_test, x_train_2, x_test_2, y_train, y_test, std_train, std_test, \
-        intensity_train, intensity_test, positions_train, positions_test, \
-        expert_number_train, expert_number_test, train_indices, test_indices = train_test_split(
-            data, data_2, data_cond, std, intensity, data_xy, expert_number, indices,
+        intensity_train, intensity_test, positions_train, positions_test,\
+        train_indices, test_indices = train_test_split(
+            data, data_2, data_cond, std, intensity, data_xy, indices,
             test_size=0.2, shuffle=True)#, stratify=binned_intensity)
 
         print("Data shapes:", x_train.shape, x_test.shape, y_train.shape, y_test.shape)
