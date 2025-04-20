@@ -27,9 +27,17 @@ from utils import (sum_channels_parallel, calculate_ws_ch_proton_model,
                    regressor_loss, calculate_expert_utilization_entropy,
                    StratifiedBatchSampler, plot_cond_pca_tsne, plot_expert_heatmap,
                    calculate_adaptive_load_balancing_loss)
+from scipy.stats import wasserstein_distance, entropy
+from sklearn.metrics import mean_absolute_error, r2_score
 
 
+DATA_IMAGES_PATH = "/net/tscratch/people/plgpbedkowski/data/data_proton_photonsum_proton_1_2312.pkl"
+DATA_COND_PATH = "/net/tscratch/people/plgpbedkowski/data/data_cond_photonsum_proton_1_2312.pkl"
+DATA_POSITIONS_PATH = "/net/tscratch/people/plgpbedkowski/data/data_coord_proton_photonsum_proton_1_2312.pkl"
+INPUT_IMAGE_SHAPE = (56, 30)
+BATCH_SIZE = 256
 LR_AUX = 1e-3
+NUM_EPOCHS = 150
 
 
 # Feature Extractor based on previous discriminator architecture
@@ -123,12 +131,12 @@ def train_epoch(model, dataloader, criterion, optimizer, device):
 
 
 # Validation function
-# Modified validate function with correct scaling
-def validate(model, dataloader, criterion, scaler_poz, device):
+def validate(model, dataloader, criterion, scaler_poz, epoch, device):
     model.eval()
     running_loss = 0.0
     all_preds = []
     all_targets = []
+    ede_list = []
 
     with torch.no_grad():
         for real_images, _, _, _, _, coords in dataloader:
@@ -136,27 +144,77 @@ def validate(model, dataloader, criterion, scaler_poz, device):
             coords = coords.to(device)
 
             outputs = model(real_images)
-
-            # Calculate loss in SCALED space
             loss = criterion(coords, outputs)
             running_loss += loss.item() * real_images.size(0)
 
-            # Inverse transform only for metrics
+            # Inverse transform for metrics
             unscaled_preds = scaler_poz.inverse_transform(outputs.cpu())
             unscaled_true = scaler_poz.inverse_transform(coords.cpu())
+
+            # Calculate Euclidean Distance Error
+            ede = np.sqrt(np.sum((unscaled_preds - unscaled_true) ** 2, axis=1))
+            ede_list.extend(ede.tolist())
 
             all_preds.extend(unscaled_preds.tolist())
             all_targets.extend(unscaled_true.tolist())
 
-    epoch_loss = running_loss / len(dataloader.dataset)
-    rmse = np.sqrt(mean_squared_error(all_targets, all_preds))
+    # Convert to numpy arrays
+    preds_array = np.array(all_preds)
+    targets_array = np.array(all_targets)
 
-    return epoch_loss, rmse, all_preds, all_targets
+    # Regression Metrics
+    mae = mean_absolute_error(targets_array, preds_array)
+    r2 = r2_score(targets_array, preds_array)
+    rmse = np.sqrt(mean_squared_error(targets_array, preds_array))
+
+    # Distribution Metrics
+    wasserstein_x = wasserstein_distance(targets_array[:, 0], preds_array[:, 0])
+    wasserstein_y = wasserstein_distance(targets_array[:, 1], preds_array[:, 1])
+
+    # KL Divergence (using histogram approximation)
+    hist_true, x_edges, y_edges = np.histogram2d(targets_array[:, 0], targets_array[:, 1], bins=50)
+    hist_pred, _, _ = np.histogram2d(preds_array[:, 0], preds_array[:, 1], bins=(x_edges, y_edges))
+
+    # Add small epsilon to avoid zero probabilities
+    hist_true = hist_true.ravel() + 1e-10
+    hist_pred = hist_pred.ravel() + 1e-10
+
+    kl_div = entropy(hist_true, hist_pred)
+
+    # Visualization plots
+    fig = plot_predictions(targets_array, preds_array, epoch)
+    error_heatmap = plot_error_heatmap(targets_array, preds_array)
+    cumulative_error = plot_cumulative_error(ede_list)
+    return_data = {
+        'val_loss': running_loss / len(dataloader.dataset),
+        'rmse': rmse,
+        'mae': mae,
+        'r2': r2,
+        'wasserstein_x': wasserstein_x,
+        'wasserstein_y': wasserstein_y,
+        'kl_div': kl_div,
+        'ede_mean': np.mean(ede_list),
+        'ede_std': np.std(ede_list),
+        'prediction_plot': wandb.Image(fig),
+        'error_heatmap': wandb.Image(error_heatmap),
+        'cumulative_error': wandb.Image(cumulative_error)
+    }
+
+    # Add 3D visualization (only create every 5 epochs to save computation)
+    if epoch % 5 == 0:
+        features_3d_plot = plot_features_3d(model, dataloader, device)
+        return_data['features_3d'] = wandb.Image(features_3d_plot)
+        plt.close(features_3d_plot)
+
+    # close the figures
+    plt.close(fig)
+    plt.close(error_heatmap)
+    plt.close(cumulative_error)
+    return return_data
 
 
-# Function to visualize predicted vs actual coordinates
 def plot_predictions(targets, predictions, epoch):
-    plt.figure(figsize=(10, 10))
+    fig = plt.figure(figsize=(10, 10))  # Create explicit figure
     targets = np.array(targets)
     predictions = np.array(predictions)
 
@@ -166,11 +224,87 @@ def plot_predictions(targets, predictions, epoch):
     plt.ylim([-10, 40])
     plt.legend()
     plt.title(f'Coordinate Predictions - Epoch {epoch}')
-    plt.xlabel('X Coordinate')
-    plt.ylabel('Y Coordinate')
+    return fig  # Return figure object instead of pyplot state
 
-    return plt
 
+def plot_error_heatmap(targets, preds):
+    fig = plt.figure(figsize=(10, 8))  # Explicit figure creation
+    errors = np.sqrt(np.sum((targets - preds) ** 2, axis=1))
+    hb = plt.hexbin(targets[:, 0], targets[:, 1], C=errors, gridsize=50, cmap='inferno')
+    plt.colorbar(hb, label='Euclidean Error')
+    plt.title('Spatial Error Distribution Heatmap')
+    return fig
+
+
+def plot_cumulative_error(ede_list):
+    fig = plt.figure(figsize=(10, 6))  # Create new figure
+    sorted_errors = np.sort(ede_list)
+    cumulative = np.arange(1, len(sorted_errors) + 1) / len(sorted_errors)
+    plt.plot(sorted_errors, cumulative, marker='.', linestyle='none')
+    plt.xlabel('Euclidean Distance Error')
+    plt.ylabel('Cumulative Probability')
+    plt.grid(True)
+    return fig
+
+
+# Add this new function to plot 3D features
+def plot_features_3d(model, dataloader, device, max_samples=1000):
+    """Extract and visualize features in 3D space"""
+    features = []
+    coords = []
+    count = 0
+
+    model.eval()
+    with torch.no_grad():
+        for real_images, _, _, _, _, target_coords in dataloader:
+            if count >= max_samples:
+                break
+
+            real_images = real_images.to(device)
+
+            # Get features from feature extractor
+            if real_images.dim() == 3:
+                real_images = real_images.unsqueeze(1)
+
+            batch_features = model.feature_extractor(real_images).cpu().numpy()
+            # batch_coords = scaler_poz.inverse_transform(target_coords)
+
+            features.append(batch_features)
+            coords.append(target_coords)
+
+            count += real_images.shape[0]
+
+    # Stack all batches
+    features = np.vstack(features)[:max_samples]
+    coords = np.vstack(coords)[:max_samples]
+
+    print("feature shape: ", features.shape)
+
+    # Reduce to 3D using PCA
+    from sklearn.decomposition import PCA
+    pca = PCA(n_components=3)
+    features_3d = pca.fit_transform(features)
+
+    # Create 3D plot
+    fig = plt.figure(figsize=(10, 8))
+    ax = fig.add_subplot(111, projection='3d')
+
+    scatter = ax.scatter(
+        features_3d[:, 0],
+        features_3d[:, 1],
+        features_3d[:, 2],
+        c=coords[:, 0],  # Color by X coordinate
+        cmap='viridis',
+        alpha=0.7
+    )
+
+    plt.colorbar(scatter, label='X Coordinate Position')
+    ax.set_title('Feature Extractor 3D Representation')
+    ax.set_xlabel('Component 1')
+    ax.set_ylabel('Component 2')
+    ax.set_zlabel('Component 3')
+
+    return fig
 
 def plot_distributions(train_coords, val_coords):
     """Plot coordinate distributions comparison"""
@@ -190,17 +324,8 @@ def plot_distributions(train_coords, val_coords):
     return plt
 
 
-
-DATA_IMAGES_PATH = "/net/tscratch/people/plgpbedkowski/data/data_proton_photonsum_proton_1_2312.pkl"
-DATA_COND_PATH = "/net/tscratch/people/plgpbedkowski/data/data_cond_photonsum_proton_1_2312.pkl"
-DATA_POSITIONS_PATH = "/net/tscratch/people/plgpbedkowski/data/data_coord_proton_photonsum_proton_1_2312.pkl"
-INPUT_IMAGE_SHAPE = (56, 30)
-BATCH_SIZE = 256
-
-
 def main():
     NAME = "working_auxiliary_regressor"
-
 
     # Set device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -261,9 +386,26 @@ def main():
     criterion = model.regressor_loss
     optimizer = optim.Adam(model.parameters(), lr=LR_AUX)
 
+    # Enhanced config tracking in main()
     config_wandb = {
-           "aux_reg_architecture": model.name,
-           "feature_extractor_architecture": model.feature_extractor.name,
+        "aux_reg_architecture": model.name,
+        "feature_extractor_architecture": model.feature_extractor.name,
+        "optimizer": optimizer.__class__.__name__,
+        "learning_rate": LR_AUX,
+        "epochs": NUM_EPOCHS,
+        "batch_size": BATCH_SIZE,
+        # System info
+        "pytorch_version": torch.__version__,
+        "cuda_available": torch.cuda.is_available(),
+        "num_gpus": torch.cuda.device_count() if torch.cuda.is_available() else 0,
+        # Model complexity
+        "total_parameters": sum(p.numel() for p in model.parameters()),
+        "trainable_parameters": sum(p.numel() for p in model.parameters() if p.requires_grad),
+        # Optimizer details
+        "optimizer_state": {
+            param_group_idx: {k: v for k, v in param_group.items() if k != 'params'}
+            for param_group_idx, param_group in enumerate(optimizer.param_groups)
+        }
     }
 
     # Initialize wandb
@@ -275,53 +417,47 @@ def main():
         tags=TAGS_RUN
     )
 
+    run.log_code("aux_regressor_test.py")
 
     # Log model architecture to wandb
     wandb.watch(model)
 
     # Training loop
-    num_epochs = 100
     best_rmse = float('inf')
-
-    for epoch in range(num_epochs):
-        # Train
+    for epoch in range(NUM_EPOCHS):
         train_loss = train_epoch(model, train_loader, criterion, optimizer, device)
+        val_metrics = validate(model, test_loader, criterion, scaler_poz, epoch, device)
 
-        # Validate
-        val_loss, val_rmse, predictions, targets = validate(model, test_loader, criterion, scaler_poz, device)
-
-        # Log metrics
-        wandb.log({
+        # Log all metrics
+        log_data = {
             'epoch': epoch,
             'train_loss': train_loss,
-            'val_loss': val_loss,
-            'val_rmse': val_rmse,
-            'learning_rate': optimizer.param_groups[0]['lr']
-        })
+            **val_metrics
+        }
+        wandb.log(log_data)
 
-        # Plot coordinate distributions
-        dist_plot = plot_distributions(positions_train, positions_test)
-        wandb.log({"coordinate_distributions": wandb.Image(dist_plot)})
-        dist_plot.close()
+        # Save best model
+        if val_metrics['rmse'] < best_rmse:
+            best_rmse = val_metrics['rmse']
+            save_path = os.path.join(EXPERIMENT_DIR_NAME, "best_model.pth")
+            torch.save({
+                'model_state': model.state_dict(),
+                'architecture': model.__class__.__name__,
+                'feature_extractor': model.feature_extractor.name
+            }, save_path)
+            wandb.save(save_path)
 
-        # # Save best model
-        # if val_rmse < best_rmse:
-        #     best_rmse = val_rmse
-        #     torch.save(model.state_dict(), 'best_auxiliary_regressor.pth')
-        #     wandb.save('best_auxiliary_regressor.pth')
+        print(f"Epoch {epoch + 1}/{NUM_EPOCHS} | "
+              f"Train Loss: {train_loss:.4f} | "
+              f"Val RMSE: {val_metrics['rmse']:.4f} | "
+              f"MAE: {val_metrics['mae']:.4f} | "
+              f"R²: {val_metrics['r2']:.4f}")
 
-        # Visualize predictions every 5 epochs
-        if epoch % 5 == 0:
-            plt = plot_predictions(targets, predictions, epoch)
-            wandb.log({"prediction_plot": wandb.Image(plt)})
-            plt.close()
-
-        print(
-            f"Epoch {epoch + 1}/{num_epochs}, Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, Val RMSE: {val_rmse:.4f}")
-
-    # # Final evaluation with best model
-    # model.load_state_dict(torch.load('best_auxiliary_regressor.pth'))
-    # _, final_rmse, final_preds, final_targets = validate(model, test_loader, criterion, scaler_poz, device)
+    # Final evaluation with best model
+    checkpoint = torch.load(save_path)
+    model.load_state_dict(checkpoint['model_state'])
+    final_metrics = validate(model, test_loader, criterion, scaler_poz, device)
+    wandb.log({'final_metrics': final_metrics})
 
     wandb.finish()
 
