@@ -151,15 +151,15 @@ def load_train_test_indices(checkpoint_data_filepath_dir: str):
         print("No data train-test-split indices found!")
         raise FileNotFoundError
 
-
-def calculate_joint_ws_across_experts(n_calc, x_tests: List, y_tests: List, generators: List,
+def calculate_joint_ws_across_experts(n_calc, x_tests: List, y_tests: List, generator,
                                       ch_org, ch_org_expert, noise_dim, device, batch_size=64, n_experts=3,
                                       shape_images=(56, 30)):
     """
-    Calculates the Wasserstein (WS) distance across the whole distribution.
+    Calculates the Wasserstein (WS) distance across the whole distribution
+    for a unified generator with multi-expert outputs.
     """
-    # if lengths of data are not the same, raise an error
-    if len(x_tests) != len(y_tests) or len(x_tests) != len(generators):
+    # Validate input data lengths
+    if len(x_tests) != len(y_tests) or len(x_tests) != n_experts:
         raise ValueError("Length of data is not the same")
 
     # Initialize WS distance arrays
@@ -168,82 +168,119 @@ def calculate_joint_ws_across_experts(n_calc, x_tests: List, y_tests: List, gene
 
     for j in range(n_calc):  # Perform multiple calculations of the WS distance
         ch_gen_all = []  # For gathering the whole generated distribution of pixels
-        ch_gen_expert = []  # For gathering expert-specific distributions
+        ch_gen_expert = [[] for _ in range(n_experts)]  # For gathering expert-specific distributions
 
-        for generator_idx in range(len(generators)):  # Iterate over all generators
-            y_test_temp = torch.tensor(y_tests[generator_idx], device=device)
-            num_samples = x_tests[generator_idx].shape[0]
+        # Process each expert data separately
+        for expert_idx in range(n_experts):
+            y_test_temp = torch.tensor(y_tests[expert_idx], device=device)
+            num_samples = x_tests[expert_idx].shape[0]
 
             if num_samples == 0:
-                ch_gen_expert.append(np.array([]))  # Append empty if no samples
                 continue
+
             try:
-                # Get predictions from generator
-                results_all = get_predictions_from_generator_results(
+                # Get predictions from the unified generator for this expert's data
+                results_all = get_predictions_from_unified_generator(
                     batch_size, num_samples, noise_dim,
-                    device, y_test_temp, generators[generator_idx],
+                    device, y_test_temp, generator,
+                    expert_idx, n_experts,
                     shape_images=shape_images
                 )
-                print(f"For generator {generator_idx}. Samples generated: {results_all.shape}, real_samples: {num_samples}")
-            except:
-                print("gen IND", generator_idx)
-                print("y_tests", len(y_tests[generator_idx]))
-                print("num_samples", num_samples)
+                # print(
+                #     f"For expert {expert_idx}. Samples generated: {results_all.shape}, real_samples: {num_samples}")
+            except Exception as e:
+                print("Error for expert:", expert_idx)
+                print("y_tests length:", len(y_tests[expert_idx]))
+                print("num_samples:", num_samples)
+                print("Exception:", e)
+                continue
+
             # Sum channels and store results
             ch_gen_smaller = pd.DataFrame(sum_channels_parallel(results_all)).values
-            ch_gen_expert.append(ch_gen_smaller.copy())  # Expert-specific data
+            ch_gen_expert[expert_idx] = ch_gen_smaller.copy()  # Expert-specific data
             ch_gen_all.extend(ch_gen_smaller.copy())  # Overall data
 
         ch_gen_all = np.array(ch_gen_all)  # Convert to numpy array
-        print("Shape of all generated:", ch_gen_all.shape)
+        # print("Shape of all generated:", ch_gen_all.shape)
 
         # Calculate WS distances
         for i in range(5):
-            ws[j][i] = wasserstein_distance(ch_org[:, i], ch_gen_all[:, i])  # Overall WS
+            # Overall WS distance
+            ws[j][i] = wasserstein_distance(ch_org[:, i], ch_gen_all[:, i])
 
-            for exp_idx in range(len(generators)):  # Per expert
-                if ch_gen_expert[exp_idx].shape[0] == 0 or ch_org_expert[exp_idx].shape[0] == 0:
+            # Per-expert WS distances
+            for exp_idx in range(n_experts):
+                if len(ch_gen_expert[exp_idx]) == 0 or ch_org_expert[exp_idx].shape[0] == 0:
                     continue
+                ch_gen_exp_array = np.array(ch_gen_expert[exp_idx])
                 ws_exp[j][exp_idx][i] = wasserstein_distance(
-                    ch_org_expert[exp_idx][:, i], ch_gen_expert[exp_idx][:, i]
+                    ch_org_expert[exp_idx][:, i], ch_gen_exp_array[:, i]
                 )
+
     # Calculate the mean WS distances across runs
     print("WS SHAPE", ws.shape)
     print("WS", ws)
-    ws_runs = ws.mean(axis=1)  # calculate mean of the all channels. WS for n_calc (n_calc, 1)
+    ws_runs = ws.mean(axis=1)  # Mean across channels for each run
     ws_mean, ws_std = ws_runs.mean(), ws_runs.std()
 
-    ws_exp_runs = ws_exp.mean(axis=2)  # (n_calc, n_experts, 1)
-    ws_mean_exp = ws_exp_runs.mean(axis=0)  # calculate mean for each expert
-    ws_std_exp = ws_exp_runs.std(axis=0)  # calculate std for each expert
+    ws_exp_runs = ws_exp.mean(axis=2)  # Mean across channels per expert per run
+    ws_mean_exp = ws_exp_runs.mean(axis=0)  # Mean across runs for each expert
+    ws_std_exp = ws_exp_runs.std(axis=0)  # Standard deviation across runs for each expert
     print("ws mean", f'{ws_mean:.2f}', end=" ")
 
     return ws_mean, ws_std, ws_mean_exp, ws_std_exp
 
 
-def get_predictions_from_generator_results(batch_size, num_samples, noise_dim,
-                                           device, y_test, generator, shape_images=(56, 30),
-                                           input_noise=None):
-    num_batches = (num_samples + batch_size - 1) // batch_size  # Calculate number of batches
+def get_predictions_from_unified_generator(batch_size, num_samples, noise_dim,
+                                           device, y_test, generator, expert_idx, n_experts,
+                                           shape_images=(56, 30), input_noise=None):
+    """
+    Get predictions from a unified generator with multiple expert outputs.
+
+    Args:
+        batch_size: Number of samples per batch
+        num_samples: Total number of samples to generate
+        noise_dim: Dimension of the input noise vector
+        device: Device to run the model on
+        y_test: Conditioning inputs
+        generator: The unified generator model
+        expert_idx: The index of the expert whose outputs we want to extract
+        n_experts: Total number of experts in the generator
+        shape_images: Shape of the output images
+        input_noise: Optional pregenerated noise
+
+    Returns:
+        numpy array of generated samples for the specified expert
+    """
+    num_batches = (num_samples + batch_size - 1) // batch_size
     results_all = np.zeros((num_samples, *shape_images))
+
     for batch_idx in range(num_batches):
         start_idx = batch_idx * batch_size
         end_idx = min(start_idx + batch_size, num_samples)
+        batch_size_actual = end_idx - start_idx
 
         if input_noise is not None:
-            noise = input_noise[start_idx:end_idx,:]
+            noise = input_noise[start_idx:end_idx, :]
         else:
-            noise = torch.randn(end_idx - start_idx, noise_dim, device=device)
+            noise = torch.randn(batch_size_actual, noise_dim, device=device)
+
         noise_cond = y_test[start_idx:end_idx]
 
-        # Generate results using the generator
+        # Generate results using the unified generator
         with torch.no_grad():
             generator.eval()
-            results = generator(noise, noise_cond).cpu().numpy()
+            # Generate outputs of shape [batch_size, n_experts, H, W]
+            unified_results = generator(noise, noise_cond)
 
+            # Extract the specific expert's output
+            # If the shape is [B, n_experts, H, W]
+            results = unified_results[:, expert_idx].cpu().numpy()
+
+        # Post-process the results
         results = np.exp(results) - 1
-        # results = results*0.75
         results_all[start_idx:end_idx] = results.reshape(-1, *shape_images)
+
     return results_all
 
 
@@ -290,19 +327,49 @@ def get_predictions_from_experts_results(num_samples, noise_dim,
 
 
 # Define the loss function
-def regressor_loss(real_coords, fake_coords, scaler_poz):
-    # Ensure real_coords and fake_coords are on the same device
-    # real_coords = real_coords.to(fake_coords.device)
+def regressor_loss(fake_coords, real_coords, router_logits, n_experts):
+    B = real_coords.shape[0]
 
-    # Use in-place scaling if the scaler provides the scale and mean attributes
-    # scale = torch.tensor(scaler_poz.scale_, device=fake_coords.device, dtype=torch.float32)
-    # mean = torch.tensor(scaler_poz.mean_, device=fake_coords.device, dtype=torch.float32)
-    # #
-    # # Scale fake_coords directly using PyTorch operations
-    # fake_coords_scaled = (fake_coords - mean) / scale
+    # Reshape fake coordinates from [B, 2*n_experts] to [B, n_experts, 2]
+    # This separates each expert's predictions
+    fake_coords_reshaped = fake_coords.view(B, n_experts, 2)
 
-    # Compute the MAE loss
-    return F.mse_loss(fake_coords, real_coords)
+    # Expand real coordinates to match expert dimension
+    # [B, 2] -> [B, n_experts, 2]
+    real_coords_expanded = real_coords.unsqueeze(1).expand(-1, n_experts, -1)
+
+    # Get router mask using Gumbel-softmax (one-hot selection)
+    router_mask = F.gumbel_softmax(router_logits, tau=1.0, hard=True)  # [B, n_experts]
+
+    # Add dimension for broadcasting with coordinates
+    # [B, n_experts] -> [B, n_experts, 1]
+    router_mask_expanded = router_mask.unsqueeze(-1)
+
+    # Apply mask to both fake and real coordinates
+    # This zeros out non-selected experts
+    masked_fake_coords = fake_coords_reshaped * router_mask_expanded
+    masked_real_coords = real_coords_expanded * router_mask_expanded
+
+    # Calculate squared error per coordinate per expert
+    squared_error = (masked_fake_coords - masked_real_coords) ** 2  # [B, n_experts, 2]
+
+    # Sum errors across coordinate dimensions (x,y)
+    # [B, n_experts, 2] -> [B, n_experts]
+    coord_error_sum = squared_error.sum(dim=2)
+
+    # Count how many samples were assigned to each expert
+    expert_sample_counts = router_mask.sum(dim=0)  # [n_experts]
+
+    # Avoid division by zero
+    expert_sample_counts = torch.clamp(expert_sample_counts, min=1.0)
+
+    # Calculate mean error per expert
+    # Sum across batch dimension and divide by number of samples per expert
+    # [B, n_experts] -> [n_experts]
+    mse_per_expert = coord_error_sum.sum(dim=0) / expert_sample_counts
+    mse_per_expert = mse_per_expert.view(n_experts, 1)
+    # Return as [n_experts, 1] tensor
+    return mse_per_expert
 
 
 def calculate_ws_ch_proton_model(n_calc, x_test, y_test, generator,
@@ -349,20 +416,60 @@ def evaluate_router(router_network, y_test, expert_number_test, accuracy_metric,
     return accuracy, precision, recall, f1
 
 
-def sdi_gan_regularization(fake_latent, fake_latent_2, noise, noise_2, std, DI_STRENGTH):
-    # Calculate the absolute differences and their means along the batch dimension
-    abs_diff_latent = torch.mean(torch.abs(fake_latent - fake_latent_2), dim=1)
-    abs_diff_noise = torch.mean(torch.abs(noise - noise_2), dim=1)
+def sdi_gan_regularization(fake_latent, fake_latent_2, noise, noise_2, std, n_experts, router_logits, DI_STRENGTH):
+    # 1. Repeat both latents n_experts number of times
+    # Calculate the difference between noises and expand it n_expert of times
+    # 2 calculate the mas from the router_logits and apply on the latents
+    # calcualte abs_diff latent shape should be [B, n_experts, 384]
 
-    # Compute the division term
-    div = abs_diff_latent / (abs_diff_noise + 1e-5)
+    # repeat the std n_expert of times and calcualte div loss.
+    # Div loss should have shape [n_experts, 1]
 
-    # Calculate the div_loss
-    div_loss = std * DI_STRENGTH / (div + 1e-5)
+    B = fake_latent.shape[0]
+    feature_dim = fake_latent.shape[1]
 
-    # Calculate the final div_loss
-    div_loss = torch.mean(std) * torch.mean(div_loss)
+    # Reshape latents to include expert dimension if needed
+    if len(fake_latent.shape) == 2:  # If shape is [B, feature_dim]
+        # Expand latents to have expert dimension
+        fake_latent = fake_latent.unsqueeze(1).expand(-1, n_experts, -1)  # [B, n_experts, feature_dim]
+        fake_latent_2 = fake_latent_2.unsqueeze(1).expand(-1, n_experts, -1)  # [B, n_experts, feature_dim]
 
+    # print('latent shape', fake_latent.shape)
+    # Calculate absolute differences between latents per expert
+    abs_diff_latent = torch.mean(torch.abs(fake_latent - fake_latent_2), dim=2)  # [B, n_experts]
+    # print("abs_diff_latent", abs_diff_latent.shape)
+    # Calculate noise differences and expand to match expert dimension
+
+    # print("noise", noise.shape)
+    abs_diff_noise = torch.mean(torch.abs(noise - noise_2), dim=1, keepdim=True)  # [B, 1]
+    # print("abs_diff_noise", abs_diff_noise.shape)
+    abs_diff_noise = abs_diff_noise.expand(-1, n_experts)  # [B, n_experts]
+
+    # Compute diversity ratio for each expert: latent_diff / noise_diff
+    # Higher values indicate better diversity
+    diversity_ratio = abs_diff_latent / (abs_diff_noise + 1e-5)  # [B, n_experts]
+
+    # print("diversity_ratio", diversity_ratio.shape)
+    # Apply router masking to focus on selected experts
+    router_mask = F.gumbel_softmax(router_logits, tau=1.0, hard=True)  # [B, n_experts]
+
+    # Ensure std has correct shape for broadcasting
+    if isinstance(std, torch.Tensor):
+        if std.dim() == 0:  # scalar
+            std = std.expand(B, n_experts)
+        elif std.shape == (B, 1):
+            std = std.expand(-1, n_experts)  # [B, n_experts]
+
+    else:  # if std is a Python scalar
+        std = torch.ones(B, n_experts, device=router_mask.device) * std
+
+    # Apply mask to focus on expert-specific diversity
+    masked_diversity = diversity_ratio * router_mask  # [B, n_experts]
+    # print("masked_diversity", masked_diversity.shape)
+
+    # Calculate final loss - negative because higher diversity is better
+    # We want to maximize diversity, so we negate the loss
+    div_loss = -DI_STRENGTH * (masked_diversity * std).sum(dim=0)
     return div_loss
 
 
@@ -387,33 +494,40 @@ def intensity_regularization(gen_im_proton, intensity_proton, router_logits, IN_
     # Sum the intensities in the generated images
     # gen_im_proton_rescaled = torch.exp(gen_im_proton.clone().detach()) - 1 #<- this fixed previous bad optimization
     gen_im_proton_rescaled = torch.exp(gen_im_proton) - 1
-    # print("Gen shape from model", gen_im_proton_rescaled.shape)
-    # Gen shape from model torch.Size([138, 1, 56, 30])
-    # After sum: torch.Size([138, 1, 1, 1])
-    sum_all_axes_p_rescaled = torch.sum(gen_im_proton_rescaled, dim=[2, 3], keepdim=True)  # Sum along all but batch dimension
+    # print("gen expert", gen_im_proton_rescaled.shape)
 
-    # REMOVE THIS RESHAPE BECAUSE IT FLATTENS THE DATA FROM ALL EXPERTS
-    # sum_all_axes_p_rescaled = sum_all_axes_p_rescaled.reshape(-1, 1)  # Scale and reshape back to (batch_size, 1)
+    # Calculate sum of intensities for each expert separately
+    B, n_experts, H, W = gen_im_proton_rescaled.shape
+    sum_intensities_per_expert = torch.sum(gen_im_proton_rescaled, dim=[2, 3])  # [B, n_experts]
+    # print("sum int per expert", sum_intensities_per_expert.shape)
 
-    # Compute mean and std as PyTorch tensors
-    std_intensity_scaled = sum_all_axes_p_rescaled.std()
-    mean_intensity_scaled = sum_all_axes_p_rescaled.mean()
-
-    # # Ensure intensity_proton is correctly shaped and on the same device
-    intensity_proton = intensity_proton.view(-1, 1).to(gen_im_proton.device)  # Ensure it is of shape [batch_size, 1]
-
-    # apply the MASK AS WELL FOR EXPERT COMPUTATIONS TO BOTH THE GENERATED AND REAL DATA
-    # OR MAYBE CALCULATE THIS N_EXPERT times each for separate expert. TRY TO MAKE THIS PARALLEL
+    router_mask = F.gumbel_softmax(router_logits, tau=1.0, hard=True)  # [B, n_experts]
+    # print("router mask", router_mask.shape)
 
 
-    # torch.Size([1536, 1]) torch.Size([256, 1])
-    print(sum_all_axes_p_rescaled.shape, intensity_proton.shape)
+    # [B, 1] -> [B, n_experts]
+    repeated_intensity = intensity_proton.expand(-1, n_experts)
+    # print("repeated_intensity", repeated_intensity.shape)
 
-    # Calculate MAE loss
-    mae_value_p = F.l1_loss(sum_all_axes_p_rescaled, intensity_proton)*IN_STRENGTH
+    # Apply router mask to get the expected intensity for each expert
+    # This determines how much of the true intensity each expert is responsible for
+    masked_real_intensities = repeated_intensity * router_mask  # [B, n_experts]
+    # print("masked_real_intensities", masked_real_intensities.shape)
 
-    return mae_value_p, sum_all_axes_p_rescaled, std_intensity_scaled.detach(),\
-           mean_intensity_scaled.detach()
+    # Calculate absolute difference for each expert separately
+    abs_diff = torch.abs(sum_intensities_per_expert - masked_real_intensities)  # [B, n_experts]
+    # print("mabs_diff", abs_diff.shape)
+
+    # Average the absolute differences across batch dimension for each expert
+    mae_per_expert = torch.mean(abs_diff, dim=0, keepdim=True).t() * IN_STRENGTH  # [n_experts, 1]
+    # print("mabs_diff", mae_per_expert.shape)
+
+    # Calculate statistics per expert
+    std_intensity = torch.std(sum_intensities_per_expert, dim=0)  # [n_experts]
+    mean_intensity = torch.mean(sum_intensities_per_expert, dim=0)  # [n_experts]
+
+    # print("mean_intensity", mean_intensity.shape)
+    return mae_per_expert, sum_intensities_per_expert, std_intensity.clone().detach(), mean_intensity.clone().detach()
 
 
 def generate_and_save_images(model, epoch, noise, noise_cond, x_test,

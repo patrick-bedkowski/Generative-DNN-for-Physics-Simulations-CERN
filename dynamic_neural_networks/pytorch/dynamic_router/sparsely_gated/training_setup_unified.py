@@ -1,4 +1,4 @@
-from models_pytorch import Generator, Discriminator, RouterNetwork, AuxReg,\
+from models_pytorch import GeneratorUnified, DiscriminatorUnified, RouterNetwork, AuxRegUnified,\
     GeneratorNeutron, DiscriminatorNeutron, AuxRegNeutron, count_model_parameters,\
     AttentionRouterNetwork, ParallelExpertWrapper
 
@@ -7,45 +7,27 @@ import torch.optim as optim
 import os
 
 
-def setup_experts(N_EXPERTS, N_COND, NOISE_DIM, LR_G, LR_D, LR_A, DI_STRENGTH, IN_STRENGTH, device=torch.device("cuda:0")):
+def setup_experts_unified(N_EXPERTS, N_COND, NOISE_DIM, LR_G, LR_D, LR_A, DI_STRENGTH, IN_STRENGTH, device=torch.device("cuda:0")):
     # Define experts
-    generators = []
-    for generator_idx in range(N_EXPERTS):
-        generator = Generator(NOISE_DIM, N_COND, DI_STRENGTH, IN_STRENGTH).to(device)
-        # expert_weights = f"/net/tscratch/people/plgpbedkowski/data/weights/gen_{generator_idx}_80.h5"
-        # print(f'Loading weights for {generator_idx} GEN')
-        # generator.load_state_dict(torch.load(expert_weights, map_location='cpu'))
-        generator = generator.to(device)  # or whichever CUDA device you're using
-        generators.append(generator)
+    generator = GeneratorUnified(NOISE_DIM, N_COND, DI_STRENGTH, IN_STRENGTH, N_EXPERTS).to(device)
+    generator_optimizer = optim.Adam(generator.parameters(), lr=LR_G)
 
-    num_params = count_model_parameters(generator)
-    print(f"Generator model has {num_params} trainable parameters.")
-    generator_optimizers = [optim.Adam(gen.parameters(), lr=LR_G) for gen in generators]
+    num_params_gen = count_model_parameters(generator)
+    print(f"Generator model has {num_params_gen} trainable parameters.")
 
     # Define discriminators
-    discriminators = []
-    for generator_idx in range(N_EXPERTS):
-        discriminator = Discriminator(N_COND).to(device)
-        # # load previous weights
-        # expert_weights = f"/net/tscratch/people/plgpbedkowski/data/weights/disc_{generator_idx}_80.h5"
-        # print(f'weights loaded for {generator_idx} DISC')
-        # discriminator.load_state_dict(torch.load(expert_weights, map_location='cpu'))
-        discriminator = discriminator.to("cuda:0")
-        discriminators.append(discriminator)
-    num_params = count_model_parameters(discriminator)
-    print(f"Discriminator model has {num_params} trainable parameters.")
-    discriminator_optimizers = [optim.Adam(disc.parameters(), lr=LR_D) for disc in discriminators]
+    discriminator = DiscriminatorUnified(N_COND, N_EXPERTS).to(device)
+    num_params_disc = count_model_parameters(discriminator)
+    print(f"Discriminator model has {num_params_disc} trainable parameters.")
+    discriminator_optimizer = optim.Adam(discriminator.parameters(), lr=LR_D)
 
-    # Define aux reg
-    aux_regs = []
-    for generator_idx in range(N_EXPERTS):
-        aux_reg = AuxReg().to(device)
-        aux_regs.append(aux_reg)
-    num_params = count_model_parameters(aux_reg)
-    print(f"Aux Reg model has {num_params} trainable parameters.")
-    aux_reg_optimizers = [optim.Adam(aux_reg.parameters(), lr=LR_A) for aux_reg in aux_regs]
+    aux_reg = AuxRegUnified(N_EXPERTS).to(device)
+    num_params_aux = count_model_parameters(aux_reg)
+    print(f"Aux Reg model has {num_params_aux} trainable parameters.")
+    aux_reg_optimizer = optim.Adam(aux_reg.parameters(), lr=LR_A)
 
-    return generators, generator_optimizers, discriminators, discriminator_optimizers, aux_regs, aux_reg_optimizers
+    return generator, generator_optimizer, discriminator, discriminator_optimizer, aux_reg, aux_reg_optimizer,\
+           num_params_gen, num_params_disc, num_params_aux
 
 
 def setup_experts_neutron(N_EXPERTS, N_COND, NOISE_DIM, LR_G, LR_D, LR_A, DI_STRENGTH, IN_STRENGTH,
@@ -123,7 +105,7 @@ def setup_router(N_COND, N_EXPERTS, LR_R=1e-3, device=torch.device("cuda:0")):
     print(f"Router model has {num_params} trainable parameters.")
     # Define the learning rate scheduler
     # router_scheduler = lr_scheduler.ReduceLROnPlateau(router_optimizer, mode='min', patience=3, factor=0.1, verbose=True)
-    return router_network, router_optimizer
+    return router_network, router_optimizer, num_params
 
 
 def load_checkpoint_weights(checkpoint_dir,

@@ -30,3 +30,10 @@ images/
 *.pth
 *.npy
 *.sh
+*.h5
+**/ijcai_neutron/
+**/dnn-tf-code/
+**/tf/
+*.psd
+*.zip
+**/experiments*/
