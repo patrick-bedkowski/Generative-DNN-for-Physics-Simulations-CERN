@@ -1,0 +1,28 @@
+# Run Black, Flake8 and MyPy every time you commit.
+# Install once with:  pre-commit install
+repos:
+  # 1. Code formatter --------------------------------------------------------
+  - repo: https://github.com/psf/black
+    rev: 24.3.0                     # pin exact version for reproducibility
+    hooks:
+      - id: black
+        language_version: python3.10
+        args: ["--line-length=140"]
+
+  # 2. Style / quality linter -----------------------------------------------
+  - repo: https://github.com/pycqa/flake8
+    rev: 7.0.0
+    hooks:
+      - id: flake8
+        additional_dependencies:
+          - flake8-bugbear==24.4.26   # optional plugin with extra warnings
+        args: ["--max-line-length=140"]
+
+  # 3. Static type-checker ---------------------------------------------------
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.10.0
+    hooks:
+      - id: mypy
+        # Make sure MyPy sees your source layout (src/…)
+        env:
+          PYTHONPATH: src

@@ -1,0 +1,60 @@
+config:
+  run_name: "test_wandb_delete"
+wandb:
+  log_experiments: True  # to initiate wandb session
+  plot_images: False  # plot images to wand
+
+model:
+  architecture: "proton"
+  n_experts: 3
+  noise_dim: 10
+  cond_dim: 9  # number of conditional values found in DATA_COND_PATH
+  generator:
+    lr_g: 1e-4
+    di_strength: 1e-1
+    in_strength: 1e-3
+  discriminator:
+    lr_d: 1e-5
+  aux_reg:
+    lr_a: 1e-4
+    strength: 1e-3
+  router:
+    version: "router_v1"
+    lr_r: 1e-3
+    n_experts: 3
+    ed_strength: 0 #0.01  # Strength on the expert distribution loss in the router loss calculation
+    gan_strength: 1e-1  # Strength on the generator loss in the router loss calculation
+    diff_strength: 1e-2  # differentiation on the generator loss in the router loss calculation
+    util_strength: 0  #  1e-4  # Strength on the expert utilization entropy in the router loss calculation
+    alb_strength: 1e-6  # 1e-3  #1e-4  # Strength on the adaptive load balancing in the router loss calculation
+    stop_router_training_epoch: null  # null if router should be trained until the end of the training
+  
+dataset:
+  zdc_type: "proton"  # proton or neutron
+  DATA_IMAGES_PATH: "/net/tscratch/people/plgpbedkowski/data/data_proton_photonsum_proton_1_2312.pkl"
+  DATA_COND_PATH: "/net/tscratch/people/plgpbedkowski/data/data_cond_photonsum_proton_1_2312.pkl"
+  DATA_POSITIONS_PATH: "/net/tscratch/people/plgpbedkowski/data/data_coord_proton_photonsum_proton_1_2312.pkl"
+#  DATA_IMAGES_PATH: "E:/data_cern/data_proton_photonsum_proton_1_2312.pkl"
+#  DATA_COND_PATH: "E:/data_cern/data_cond_photonsum_proton_1_2312.pkl"
+#  DATA_POSITIONS_PATH: "E:/data_cern/data_coord_proton_photonsum_proton_1_2312.pkl"
+  input_image_shape: [56, 30]
+  MIN_INTENSITY_THRESHOLD: null  # None means no thresholding
+  MAX_INTENSITY_THRESHOLD: null
+  read_n_samples: null  # None means all samples
+  shuffle_train_test_split: True
+  test_size: 0.2
+
+
+
+train:
+  batch_size: 256
+  epochs: 10
+  ws_threshold_model_save: 2
+  save_experiment_data: False
+  save_experiments_dir: "/net/tscratch/people/plgpbedkowski/dynamic_neural_networks/experiments/"  # main directory with all experiments
+
+  # checkpoint info. Load existing training files to continue training
+  checkpoint_experiment_dir: null # absolute path to the experiment folder containing dir models/ and info/ or None
+  epoch_to_load: null # epoch number or None
+
+limit_samples: null  # TODO: remove
