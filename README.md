@@ -2,6 +2,12 @@
 
 This repository contains code for the Master's thesis: _Development of Dynamic Neural Network Models in Zero Degree Calorimeter Simulations of the ALICE Experiment at CERN_ developed during studies at Warsaw Unviersity of Technology.
 
+<p align="center">
+  <img src="research_dir/images/moe/moe-architecture.png" alt="MoE Architecture" width="500"/>
+  <br/>
+  <em>Figure 1: Mixture of Experts (MoE) architecture of the proposed work.</em>
+</p>
+
 ## Table of contents
 
 1. [Setting Developing Environment](#setting-developing-environment)
