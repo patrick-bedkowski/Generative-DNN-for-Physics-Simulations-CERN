@@ -1,0 +1,15 @@
+=== Starting Analysis ===
+
+=== Coordinate Distribution Analysis ===
+Statistical summary:
+        min   max       mean  median        std
+max_x  0.0  43.0  22.250632    22.0  12.713540
+max_y  0.0  43.0  21.830041    22.0  13.147766
+
+=== Visualizing Sample Images ===
+
+=== Image-Coordinate Relationship Analysis ===
+Correlation between mean image intensity and max_x: -0.664
+Correlation between mean image intensity and max_y: -0.372
+
+=== Analysis Complete ===
