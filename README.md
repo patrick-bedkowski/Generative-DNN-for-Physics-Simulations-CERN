@@ -1,10 +1,13 @@
-# ExpertSim: Fast Particle Detector Simulation Using Mixture-of-Generative-Experts
+# Generative models for Zero Degree Calorimeter Simulations of the ALICE experiment at CERN.
+
+This repository contains code for the Master's thesis: _Development of Dynamic Neural Network Models in Zero Degree Calorimeter Simulations of the ALICE Experiment at CERN_ developed during studies at Warsaw Unviersity of Technology.
 
 ## Table of contents
 
 1. [Setting Developing Environment](#setting-developing-environment)
 2. [Producing data for tests](#producing-data-for-tests)
     1. [Original files](#original-files)
+3. [Python scripts for training models](#python-scripts-for-training-models)
 
 ## Setting Developing Environment
 
