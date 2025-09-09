@@ -1,257 +1,14 @@
 import os
-import numpy as np
 from scipy.stats import wasserstein_distance
-from scipy.ndimage import center_of_mass
 import pandas as pd
-import torch
-import torch.nn.functional as F
 import matplotlib.pyplot as plt
-from typing import List
 from sklearn.model_selection import StratifiedKFold
 from .utils import sum_channels_parallel
-from omegaconf import DictConfig
-
-
-"""
-NEW PART
-"""
 
 import torch
 import torch.nn.functional as F
 import numpy as np
-from typing import Tuple, List, Dict
-from itertools import combinations
-
-
-#
-# def generator_train_step(noise, noise_2,
-#                          fake_images,
-#                          fake_output,
-#                          fake_latent,
-#                          fake_latent_2,
-#                          g_optimizer,
-#                          #class_counts,
-#                          std, intensity,
-#                          #a_optimizer, generated_positions, true_positions,
-#                          #aux_strength,
-#                          di_strength, in_strength,
-#                          cfg, device):
-#     # Train Generator
-#     g_optimizer.zero_grad()
-#     criterion = torch.nn.BCELoss()
-#     fake_for_gen = fake_output
-#     gen_loss = criterion(fake_for_gen, torch.ones_like(fake_for_gen))
-#
-#     # div_loss = sdi_gan_regularization(fake_latent, fake_latent_2,
-#     #                                   noise, noise_2,
-#     #                                   std, di_strength)
-#     #
-#     # intensity_loss, mean_intenisties, std_intensity, mean_intensity = intensity_regularization(fake_images,
-#     #                                                                                            intensity,
-#     #                                                                                            in_strength)
-#
-#     gen_loss = gen_loss  # + div_loss + intensity_loss
-#
-#     # Train auxiliary regressor
-#     #a_optimizer.zero_grad()
-#     # aux_reg_loss = regressor_loss(true_positions, generated_positions, aux_strength=aux_strength)
-#
-#     # gen_loss += aux_reg_loss
-#
-#
-#     # # Check for invalid gradients
-#     # for name, param in g_optimizer.param_groups[0]['params']:
-#     #     if param.grad is not None:
-#     #         if torch.isnan(param.grad).any() or torch.isinf(param.grad).any():
-#     #             print(f"Invalid gradient in {name}")
-#
-#     gen_loss.backward()
-#
-#     # g_optimizer.param_groups[0]['lr'] = cfg.model.generator.lr_g * class_counts.clone().detach()
-#     g_optimizer.step()
-#     # a_optimizer.param_groups[0]['lr'] = cfg.model.generator.lr_a * class_counts.clone().detach()
-#     # a_optimizer.step()
-#
-#     # # Auxiliary loss (Gradients flow back to the generator to update it)
-#     # generated_positions = a_reg(fake_images)
-#     # aux_reg_loss = aux_reg_criterion(true_positions, generated_positions, scaler_poz, AUX_STRENGTH)
-#     #
-#     # # Combined loss for generator
-#     # total_gen_loss = gen_loss + aux_reg_loss.detach()  # Detach aux_loss from generator
-#     #
-#     # # Backpropagate generator losses
-#     # total_gen_loss.backward()
-#     # g_optimizer.param_groups[0]['lr'] = LR_G * class_counts.clone().detach()
-#     # g_optimizer.step()
-#     #
-#     # # Train aux_reg separately
-#     # a_optimizer.zero_grad()
-#     # a_optimizer.param_groups[0]['lr'] = LR_A * class_counts.clone().detach()
-#     # a_optimizer.step()
-#
-#     return gen_loss.item()#, div_loss.item(), intensity_loss.item(), aux_reg_loss.item(), std_intensity,\ mean_intensity, mean_intenisties
-
-
-def generator_train_step(noise, noise_2,
-                         fake_images,
-                         fake_output,
-                         fake_latent,
-                         fake_latent_2,
-                         g_optimizer,
-                         class_counts,
-                         std, intensity,
-                         a_optimizer, generated_positions, true_positions,
-                         aux_strength,
-                         di_strength, in_strength,
-                         cfg, device):
-    # Train Generator
-    g_optimizer.zero_grad()
-    criterion = torch.nn.BCELoss()
-    fake_for_gen = fake_output
-    gen_loss = criterion(fake_for_gen, torch.ones_like(fake_for_gen))
-
-    # div_loss = sdi_gan_regularization(fake_latent, fake_latent_2,
-    #                                   noise, noise_2,
-    #                                   std, di_strength)
-
-    # intensity_loss, mean_intenisties, std_intensity, mean_intensity = intensity_regularization(fake_images,
-    #                                                                                            intensity,
-    #                                                                                            in_strength)
-
-    gen_loss = gen_loss #+ div_loss + intensity_loss
-
-    # Train auxiliary regressor
-    #a_optimizer.zero_grad()
-    # aux_reg_loss = regressor_loss(true_positions, generated_positions, aux_strength=aux_strength)
-
-    # gen_loss += aux_reg_loss
-
-
-    # # Check for invalid gradients
-    # for name, param in g_optimizer.param_groups[0]['params']:
-    #     if param.grad is not None:
-    #         if torch.isnan(param.grad).any() or torch.isinf(param.grad).any():
-    #             print(f"Invalid gradient in {name}")
-
-    gen_loss.backward()
-
-    # g_optimizer.param_groups[0]['lr'] = cfg.model.generator.lr_g * class_counts.clone().detach()
-    g_optimizer.step()
-    # a_optimizer.param_groups[0]['lr'] = cfg.model.generator.lr_a * class_counts.clone().detach()
-    # a_optimizer.step()
-
-    # # Auxiliary loss (Gradients flow back to the generator to update it)
-    # generated_positions = a_reg(fake_images)
-    # aux_reg_loss = aux_reg_criterion(true_positions, generated_positions, scaler_poz, AUX_STRENGTH)
-    #
-    # # Combined loss for generator
-    # total_gen_loss = gen_loss + aux_reg_loss.detach()  # Detach aux_loss from generator
-    #
-    # # Backpropagate generator losses
-    # total_gen_loss.backward()
-    # g_optimizer.param_groups[0]['lr'] = LR_G * class_counts.clone().detach()
-    # g_optimizer.step()
-    #
-    # # Train aux_reg separately
-    # a_optimizer.zero_grad()
-    # a_optimizer.param_groups[0]['lr'] = LR_A * class_counts.clone().detach()
-    # a_optimizer.step()
-
-    return gen_loss.item()#, div_loss.item(), intensity_loss.item(), aux_reg_loss.item(), std_intensity,\ mean_intensity, mean_intenisties
-
-
-def discriminator_train_step(
-        self,
-        real_output: torch.tensor,
-        fake_output: torch.tensor,
-        d_optimizer: torch.optim.Optimizer,
-        device: torch.device
-) -> float:
-    d_optimizer.zero_grad()
-    criterion = torch.nn.BCELoss()
-
-    # Clone to avoid graph issues
-    real_output = real_output.clone()
-    fake_output = fake_output.clone().detach()  # Detach fake to prevent gen gradient flow
-
-    real_labels = torch.ones_like(real_output, device=device)
-    loss_real = criterion(real_output, real_labels)
-
-    fake_labels = torch.zeros_like(fake_output, device=device)
-    loss_fake = criterion(fake_output, fake_labels)
-
-    disc_loss = loss_real + loss_fake
-    disc_loss.backward(retain_graph=True)
-    d_optimizer.step()
-    return disc_loss.item()
-
-
-def compute_router_losses(
-        gen_losses: List[float],
-        disc_losses: List[float],
-        predicted_expert_one_hot: torch.Tensor,
-        aux_reg_features_experts: List[torch.Tensor],
-        mean_intensities_batch: torch.Tensor,
-        cfg: DictConfig,
-        device: torch.device
-) -> Dict[str, torch.tensor]:
-    """Compute all router-related losses."""
-
-    losses = {}
-
-    # GAN loss
-    if cfg.model.router.gen_strength > 0:
-        gen_tensor = torch.tensor(gen_losses, device=device)
-        disc_tensor = torch.tensor(disc_losses, device=device)
-        losses['gan_loss'] = (gen_tensor.mean() + disc_tensor.mean()) * cfg.model.router.gen_strength
-    else:
-        losses['gan_loss'] = torch.tensor(0.0, device=device)
-
-    # Expert entropy loss
-    if cfg.model.router.util_strength > 0:
-        avg_gating = torch.mean(predicted_expert_one_hot, dim=0)
-        entropy = -torch.sum(avg_gating * torch.log(avg_gating + 1e-9))
-        losses['entropy_loss'] = entropy * cfg.model.router.util_strength
-    else:
-        losses['entropy_loss'] = torch.tensor(0.0, device=device)
-
-    # Expert distribution loss
-    if cfg.model.router.ed_strength > 0:
-        features = mean_intensities_batch.reshape(-1, 1)
-        pairwise_distances = torch.cdist(features, features, p=2)
-        gating_similarities = torch.matmul(predicted_expert_one_hot, predicted_expert_one_hot.T)
-        losses['distribution_loss'] = (torch.sum(gating_similarities * pairwise_distances) /
-                                       gating_similarities.size(0)) * cfg.model.router.ed_strength
-    else:
-        losses['distribution_loss'] = torch.tensor(0.0, device=device)
-
-    # Differentiation loss
-    if cfg.model.router.diff_strength > 0:
-        diff_loss = torch.tensor(0.0, device=device)
-        feature_means = [feat.mean(0, keepdim=True) for feat in aux_reg_features_experts if feat.numel() > 0]
-
-        for i, j in combinations(range(len(feature_means)), 2):
-            cosine_sim = F.cosine_similarity(feature_means[i], feature_means[j])
-            diff_loss += torch.abs(cosine_sim)
-
-        losses['differentiation_loss'] = diff_loss * cfg.model.router.diff_strength
-    else:
-        losses['differentiation_loss'] = torch.tensor(0.0, device=device)
-
-    # Adaptive load balancing loss
-    if cfg.model.router.alb_strength > 0:
-        routing_scores = predicted_expert_one_hot.sum(dim=0)
-        penalties = torch.exp(1.0 / (routing_scores + 1e-6))
-        losses['alb_loss'] = penalties.mean() * cfg.model.router.alb_strength
-    else:
-        losses['alb_loss'] = torch.tensor(0.0, device=device)
-
-    # Total router loss
-    losses['router_loss'] = (losses['gan_loss'] + losses['distribution_loss'] -
-                             losses['entropy_loss'] + losses['alb_loss'] -
-                             losses['differentiation_loss'])
-
-    return losses
+from typing import List
 
 
 def sdi_gan_regularization(fake_latent, fake_latent_2, noise, noise_2, std, di_strength):
@@ -269,15 +26,6 @@ def sdi_gan_regularization(fake_latent, fake_latent_2, noise, noise_2, std, di_s
     div_loss = torch.mean(std) * torch.mean(div_loss)
 
     return div_loss
-
-
-"""
-Old part
-"""
-
-
-
-
 
 
 def intensity_regularization(gen_im_proton, intensity_proton, IN_STRENGTH):
@@ -299,34 +47,14 @@ def intensity_regularization(gen_im_proton, intensity_proton, IN_STRENGTH):
     """
 
     # Sum the intensities in the generated images
-    # gen_im_proton_rescaled = torch.exp(gen_im_proton.clone().detach()) - 1 #<- this fixed previous bad optimization
     gen_im_proton_rescaled = torch.exp(gen_im_proton) - 1
-    # Gen shape from model torch.Size([B, 3, 56, 30])
-    # After sum: torch.Size([B, 3, 1, 1])
     sum_all_axes_p_rescaled = torch.sum(gen_im_proton_rescaled, dim=[2, 3], keepdim=False)
-    # Sum along the image dimensions
-
-    # print(sum_all_axes_p_rescaled.shape)  # (batch_size_current, 1)
-    # print(sum_all_axes_p_rescaled)
-    # REMOVE THIS RESHAPE BECAUSE IT FLATTENS THE DATA FROM ALL EXPERTS
-    # sum_all_axes_p_rescaled = sum_all_axes_p_rescaled.reshape(-1, 1)  # Scale and reshape back to (batch_size, 1)
-
-    # Compute mean and std as PyTorch tensors
     std_intensity_scaled = sum_all_axes_p_rescaled.std()
     mean_intensity_scaled = sum_all_axes_p_rescaled.mean()  # scalar
-    # print('---------------')
-    # print(mean_intensity_scaled.shape)
-    # print('---------------')
-    # # Ensure intensity_proton is correctly shaped and on the same device
+    # Ensure intensity_proton is correctly shaped and on the same device
     intensity_proton = intensity_proton.view(-1, 1).to(gen_im_proton.device)  # Ensure it is of shape [batch_size, 1]
 
-    # apply the MASK AS WELL FOR EXPERT COMPUTATIONS TO BOTH THE GENERATED AND REAL DATA
-    # OR MAYBE CALCULATE THIS N_EXPERT times each for separate expert. TRY TO MAKE THIS PARALLEL
-
-    # print('shape sum_all_axes_p_rescaled', sum_all_axes_p_rescaled.shape)
-    # print('shape intensity_proton',intensity_proton.shape)
     assert sum_all_axes_p_rescaled.shape == intensity_proton.shape
-    # Calculate MAE loss
     mae_value_p = F.l1_loss(sum_all_axes_p_rescaled, intensity_proton)*IN_STRENGTH
 
     return mae_value_p, sum_all_axes_p_rescaled, std_intensity_scaled, mean_intensity_scaled
@@ -396,16 +124,7 @@ def calculate_joint_ws_across_experts(n_calc, x_tests: List, y_tests: List, gene
     ws_exp_runs = ws_exp.mean(axis=2)  # (n_calc, n_experts, 1)
     ws_mean_exp = ws_exp_runs.mean(axis=0)  # calculate mean for each expert
     print("ws mean", f'{ws_mean:.2f}', end=" ")
-    if n_experts == 4:
-        return ws_mean, ws_std, ws_mean_exp[0], ws_mean_exp[1], ws_mean_exp[2], ws_mean_exp[3]
-    elif n_experts == 5:
-        return ws_mean, ws_std, ws_mean_exp[0], ws_mean_exp[1], ws_mean_exp[2], ws_mean_exp[3], ws_mean_exp[4]
-    elif n_experts == 3:
-        return ws_mean, ws_std, ws_mean_exp[0], ws_mean_exp[1], ws_mean_exp[2]
-    elif n_experts == 2:
-        return ws_mean, ws_std, ws_mean_exp[0], ws_mean_exp[1]
-    elif n_experts == 1:
-        return ws_mean, ws_std, ws_mean_exp[0]
+    return (ws_mean, ws_std, *ws_mean_exp[:n_experts])
 
 
 def get_predictions_from_generator_results(generator, batch_size, num_samples, noise_dim,
@@ -428,8 +147,7 @@ def get_predictions_from_generator_results(generator, batch_size, num_samples, n
             generator.eval()
             results = generator(noise, noise_cond).cpu().numpy()
 
-        results = np.exp(results) - 1
-        # results = results*0.75
+        results = np.expm1(results)
         results_all[start_idx:end_idx] = results.reshape(-1, *shape_images)
     return results_all
 
@@ -466,30 +184,14 @@ def get_predictions_from_experts_results(num_samples, noise_dim,
         experts[2].eval()
         results_2 = experts[2](noise_2, data_cond_2).cpu().numpy()
 
-    results_0 = np.exp(results_0) - 1 # 40
-    results_1 = np.exp(results_1) - 1 # 40
-    results_2 = np.exp(results_2) - 1 # 40
+    results_0 = np.expm1(results_0)
+    results_1 = np.expm1(results_1)
+    results_2 = np.expm1(results_2)
 
     results_all[indx_0] = results_0.reshape(-1, 56, 30)
     results_all[indx_1] = results_1.reshape(-1, 56, 30)
     results_all[indx_2] = results_2.reshape(-1, 56, 30)
     return results_all
-
-
-# Define the loss function
-def regressor_loss(real_coords, fake_coords, aux_strength):
-    # Ensure real_coords and fake_coords are on the same device
-    # real_coords = real_coords.to(fake_coords.device)
-
-    # Use in-place scaling if the scaler provides the scale and mean attributes
-    # scale = torch.tensor(scaler_poz.scale_, device=fake_coords.device, dtype=torch.float32)
-    # mean = torch.tensor(scaler_poz.mean_, device=fake_coords.device, dtype=torch.float32)
-    #
-    # # Scale fake_coords directly using PyTorch operations
-    # fake_coords_scaled = (fake_coords - mean) / scale
-
-    # Compute the MAE loss
-    return F.mse_loss(fake_coords, real_coords) * aux_strength
 
 
 def calculate_ws_ch_proton_model(n_calc, x_test, y_test, generator,
@@ -558,15 +260,11 @@ def generate_and_save_images(model, epoch, noise, noise_cond, x_test,
     return fig
 
 
-
-
 def calculate_entropy(p):
     """
     Calculate entropy of a probability distribution p.
     """
     return -torch.sum(p * torch.log(p + 1e-9), dim=-1)
-
-
 
 
 class StratifiedBatchSampler:
@@ -615,26 +313,69 @@ def save_models(filepath_models, n_experts, aux_regs, aux_reg_optimizers,
         print(f"Error saving models: {e}")
 
 
-def save_models_and_architectures(filepath_models, n_experts, aux_regs, aux_reg_optimizers,
-                                  generators, generator_optimizers, discriminators, discriminator_optimizers,
-                                  router_network, router_optimizer, epoch):
-    try:
-        for i in range(n_experts):
-            torch.save(generators[i],
-                       os.path.join(filepath_models, "gen_" + str(i) + "_" + str(epoch) + ".pth"))
-            torch.save(generator_optimizers[i].state_dict(),
-                       os.path.join(filepath_models, "gen_optim_" + str(i) + "_" + str(epoch) + ".pth"))
-            torch.save(discriminators[i],
-                       os.path.join(filepath_models, "disc_" + str(i) + "_" + str(epoch) + ".pth"))
-            torch.save(discriminator_optimizers[i].state_dict(),
-                       os.path.join(filepath_models, "disc_optim_" + str(i) + "_" + str(epoch) + ".pth"))
-            torch.save(aux_regs[i], os.path.join(filepath_models,
-                                                              "aux_reg_" + str(i) + "_" + str(epoch) + ".pth"))
-            torch.save(aux_reg_optimizers[i].state_dict(),
-                       os.path.join(filepath_models, "aux_reg_optim_" + str(i) + "_" + str(epoch) + ".pth"))
+def save_models_and_architectures(filepath_models, n_experts,
+                                  aux_regs, aux_reg_optimizers,
+                                  generators, generator_optimizers,
+                                  discriminators, discriminator_optimizers,
+                                  router_network, router_optimizer,
+                                  epoch, multiple_aux_regs=False):
+    def save_item(item, name, idx=None):
+        """Save single item or indexed item with a proper filename."""
+        if idx is None:
+            filename = os.path.join(filepath_models, f"{name}_epoch_{epoch}.pth")
+            torch.save(item, filename)
+        else:
+            filename = os.path.join(filepath_models, f"{name}_{idx}_epoch_{epoch}.pth")
+            torch.save(item, filename)
 
-        # save router
-        torch.save(router_network, os.path.join(filepath_models, f"router_network_{str(epoch)}.pth"))
-        torch.save(router_optimizer.state_dict(), os.path.join(filepath_models, f"router_network_optim_{str(epoch)}.pth"))
+    try:
+        if multiple_aux_regs:
+            # Save aux regs
+            if isinstance(aux_regs, (list, tuple)):
+                for i in range(n_experts):
+                    save_item(aux_regs[i], "aux_reg", i)
+            else:
+                save_item(aux_regs, "aux_reg")
+
+            if isinstance(aux_reg_optimizers, (list, tuple)):
+                for i in range(n_experts):
+                    save_item(aux_reg_optimizers[i], "aux_reg_optim", i)
+            else:
+                save_item(aux_reg_optimizers, "aux_reg_optim")
+        else:
+            # save only first aux reg
+            save_item(aux_regs[0], "aux_reg_optim")
+            save_item(aux_reg_optimizers[0], "aux_reg_optim")
+
+        # Save generators
+        if isinstance(generators, (list, tuple)):
+            for i in range(n_experts):
+                save_item(generators[i], "gen", i)
+        else:
+            save_item(generators, "gen")
+
+        if isinstance(generator_optimizers, (list, tuple)):
+            for i in range(n_experts):
+                save_item(generator_optimizers[i], "gen_optim", i)
+        else:
+            save_item(generator_optimizers, "gen_optim")
+
+        # Save discriminators
+        if isinstance(discriminators, (list, tuple)):
+            for i in range(n_experts):
+                save_item(discriminators[i], "disc", i)
+        else:
+            save_item(discriminators, "disc")
+
+        if isinstance(discriminator_optimizers, (list, tuple)):
+            for i in range(n_experts):
+                save_item(discriminator_optimizers[i], "disc_optim", i)
+        else:
+            save_item(discriminator_optimizers, "disc_optim")
+
+        # Save router and its optimizer
+        save_item(router_network, "router_network")
+        save_item(router_optimizer, "router_network_optim")
+
     except Exception as e:
         print(f"Error saving models: {e}")

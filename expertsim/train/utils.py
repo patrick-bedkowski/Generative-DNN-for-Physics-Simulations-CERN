@@ -4,10 +4,8 @@ from scipy.stats import wasserstein_distance
 from scipy.ndimage import center_of_mass
 import pandas as pd
 import torch
-import torch.nn.functional as F
 import matplotlib.pyplot as plt
 from typing import List
-from sklearn.model_selection import StratifiedKFold
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 import seaborn as sns
@@ -108,7 +106,6 @@ def calculate_image_features(images):
             centers_x.append(center[1])  # x-center
             centers_y.append(center[0])  # y-center
 
-        # Number of pixels > 0
         non_zero_pixels.append(np.sum(img > 0))
 
     # Convert to numpy arrays for easier manipulation
@@ -136,7 +133,7 @@ def calculate_joint_ws_across_experts(n_calc, x_tests: List, y_tests: List, gene
         ch_gen_expert = []  # For gathering expert-specific distributions
 
         for generator_idx in range(len(generators)):  # Iterate over all generators
-            y_test_temp = torch.tensor(y_tests[generator_idx], device=device)
+            y_test_temp = y_tests[generator_idx]
             num_samples = x_tests[generator_idx].shape[0]
 
             if num_samples == 0:
@@ -144,23 +141,20 @@ def calculate_joint_ws_across_experts(n_calc, x_tests: List, y_tests: List, gene
                 continue
             try:
                 # Get predictions from generator
-                results_all = get_predictions_from_generator_results(
+                results_all, _ = get_predictions_from_generator_results(
                     batch_size, num_samples, noise_dim,
                     device, y_test_temp, generators[generator_idx],
                     shape_images=shape_images
                 )
-                print(f"For generator {generator_idx}. Samples generated: {results_all.shape}, real_samples: {num_samples}")
+                # print(f"For generator {generator_idx}. Samples generated: {results_all.shape}, real_samples: {num_samples}")
             except:
-                print("gen IND", generator_idx)
-                print("y_tests", len(y_tests[generator_idx]))
-                print("num_samples", num_samples)
+                print("Error occurred while generating samples for generator", generator_idx)
             # Sum channels and store results
             ch_gen_smaller = pd.DataFrame(sum_channels_parallel(results_all)).values
             ch_gen_expert.append(ch_gen_smaller.copy())  # Expert-specific data
             ch_gen_all.extend(ch_gen_smaller.copy())  # Overall data
 
         ch_gen_all = np.array(ch_gen_all)  # Convert to numpy array
-        print("Shape of all generated:", ch_gen_all.shape)
 
         # Calculate WS distances
         for i in range(5):
@@ -172,16 +166,12 @@ def calculate_joint_ws_across_experts(n_calc, x_tests: List, y_tests: List, gene
                 ws_exp[j][exp_idx][i] = wasserstein_distance(
                     ch_org_expert[exp_idx][:, i], ch_gen_expert[exp_idx][:, i]
                 )
-    # Calculate the mean WS distances across runs
-    print("WS SHAPE", ws.shape)
-    print("WS", ws)
     ws_runs = ws.mean(axis=1)  # calculate mean of the all channels. WS for n_calc (n_calc, 1)
     ws_mean, ws_std = ws_runs.mean(), ws_runs.std()
 
     ws_exp_runs = ws_exp.mean(axis=2)  # (n_calc, n_experts, 1)
     ws_mean_exp = ws_exp_runs.mean(axis=0)  # calculate mean for each expert
     ws_std_exp = ws_exp_runs.std(axis=0)  # calculate std for each expert
-    print("ws mean", f'{ws_mean:.2f}', end=" ")
 
     return ws_mean, ws_std, ws_mean_exp, ws_std_exp
 
@@ -191,6 +181,8 @@ def get_predictions_from_generator_results(batch_size, num_samples, noise_dim,
                                            input_noise=None):
     num_batches = (num_samples + batch_size - 1) // batch_size  # Calculate number of batches
     results_all = np.zeros((num_samples, *shape_images))
+    results_all_no_transform = np.zeros((num_samples, *shape_images))
+
     for batch_idx in range(num_batches):
         start_idx = batch_idx * batch_size
         end_idx = min(start_idx + batch_size, num_samples)
@@ -206,10 +198,11 @@ def get_predictions_from_generator_results(batch_size, num_samples, noise_dim,
             generator.eval()
             results = generator(noise, noise_cond).cpu().numpy()
 
-        results = np.exp(results) - 1
+        results_transform = np.expm1(results)
         # results = results*0.75
-        results_all[start_idx:end_idx] = results.reshape(-1, *shape_images)
-    return results_all
+        results_all[start_idx:end_idx] = results_transform.reshape(-1, *shape_images)
+        results_all_no_transform[start_idx:end_idx] = results.reshape(-1, *shape_images)
+    return results_all, results_all_no_transform
 
 
 def get_predictions_from_experts_results(num_samples, noise_dim,
@@ -273,22 +266,6 @@ def get_predictions_from_experts_results(num_samples, noise_dim,
     return results_all
 
 
-# Define the loss function
-def regressor_loss(real_coords, fake_coords, scaler_poz):
-    # Ensure real_coords and fake_coords are on the same device
-    # real_coords = real_coords.to(fake_coords.device)
-
-    # Use in-place scaling if the scaler provides the scale and mean attributes
-    # scale = torch.tensor(scaler_poz.scale_, device=fake_coords.device, dtype=torch.float32)
-    # mean = torch.tensor(scaler_poz.mean_, device=fake_coords.device, dtype=torch.float32)
-    # #
-    # # Scale fake_coords directly using PyTorch operations
-    # fake_coords_scaled = (fake_coords - mean) / scale
-
-    # Compute the MAE loss
-    return F.mse_loss(fake_coords, real_coords)
-
-
 def calculate_ws_ch_proton_model(n_calc, x_test, y_test, generator,
                                  ch_org, noise_dim, device, batch_size=64):
     ws = np.zeros(5)
@@ -300,7 +277,7 @@ def calculate_ws_ch_proton_model(n_calc, x_test, y_test, generator,
 
     for j in range(n_calc):  # Perform few calculations of the ws distance
         # appends the generated image to the specific indices of the num_batches
-        results_all = get_predictions_from_generator_results(batch_size, num_samples, noise_dim,
+        results_all, _ = get_predictions_from_generator_results(batch_size, num_samples, noise_dim,
                                                              device, y_test, generator)
         # now results_all contains all images in batch
         try:
@@ -333,13 +310,33 @@ def evaluate_router(router_network, y_test, expert_number_test, accuracy_metric,
     return accuracy, precision, recall, f1
 
 
+def generate_and_save_images_from_generations(predictions, epoch, x_test,
+                                              generator_name, k=6, shape_images=(56, 30)):
+    SUPTITLE_TXT = f"\nModel data from {generator_name}" \
+                   f"\nEPOCH: {epoch}"
+
+    fig, axs = plt.subplots(2, k, figsize=(15, 5))
+    fig.suptitle(SUPTITLE_TXT, x=0.1, horizontalalignment='left')
+    for i in range(0, 2*k):
+        if i < k:
+            x = x_test[i].reshape(*shape_images)
+        else:
+            x = predictions[i - k]
+        im = axs[i // k, i % k].imshow(x, cmap='gnuplot')
+        axs[i // k, i % k].axis('off')
+        fig.colorbar(im, ax=axs[i // k, i % k])
+
+    fig.tight_layout(rect=[0, 0, 1, 0.975])
+    plt.close(fig)
+    return fig
+
 
 def generate_and_save_images(model, epoch, noise, noise_cond, x_test,
                              photon_sum_proton_min, photon_sum_proton_max,
                              device, random_generator, shape_images=(56, 30)):
     if noise_cond is None:
         return None
-    SUPTITLE_TXT = f"\nModel: SDI-GAN data from {random_generator}" \
+    SUPTITLE_TXT = f"\nModel data from {random_generator}" \
                    f"\nPhotonsum interval: [{photon_sum_proton_min}, {photon_sum_proton_max}]" \
                    f"\nEPOCH: {epoch}"
 
@@ -347,19 +344,20 @@ def generate_and_save_images(model, epoch, noise, noise_cond, x_test,
     model.eval()
 
     # Ensure y_test is a PyTorch tensor
-    noise_cond = torch.tensor(noise_cond, device=device)
+    noise_cond = noise_cond.to(device)
 
     # Generate predictions
     with torch.no_grad():
         noise = noise.to(device)
         noise_cond = noise_cond.to(device)
         predictions = model(noise, noise_cond).cpu().numpy().reshape(-1, *shape_images)  # Move to CPU for numpy operations
+        predictions = np.expm1(predictions)
 
     fig, axs = plt.subplots(2, 6, figsize=(15, 5))
     fig.suptitle(SUPTITLE_TXT, x=0.1, horizontalalignment='left')
     for i in range(0, 12):
         if i < 6:
-            x = x_test[i].reshape(*shape_images)
+            x = np.expm1(x_test[i]).reshape(*shape_images)
         else:
             x = predictions[i - 6]
         im = axs[i // 6, i % 6].imshow(x, cmap='gnuplot')
@@ -383,7 +381,6 @@ def calculate_expert_distribution_loss(gating_probs, features, lambda_reg=0.1):
     Returns:
         torch.Tensor: The calculated regularization loss.
     """
-    # reshape the features from shape (batch_size) to (batch_size, 1)
     # Compute the pairwise Euclidean distance between the features
     pairwise_distances = torch.cdist(features, features, p=2)  # Shape: (batch_size, batch_size)
 
@@ -420,27 +417,6 @@ def calculate_expert_utilization_entropy(gating_probs, ENT_STRENGTH=0.1):
     avg_gating_probs = torch.mean(gating_probs, dim=0)  # Average over samples. The sum of that is equal roughly to 1
     entropy = calculate_entropy(avg_gating_probs)
     return entropy * ENT_STRENGTH
-
-
-class StratifiedBatchSampler:
-    def __init__(self, y, batch_size, shuffle=True):
-        if torch.is_tensor(y):
-            y = y.numpy()
-        assert len(y.shape) == 1, 'label array must be 1D'
-        n_batches = int(len(y) / batch_size)
-        self.skf = StratifiedKFold(n_splits=n_batches, shuffle=shuffle)
-        self.X = torch.randn(len(y),1).numpy()
-        self.y = y
-        self.shuffle = shuffle
-
-    def __iter__(self):
-        if self.shuffle:
-            self.skf.random_state = torch.randint(0,int(1e8),size=()).item()
-        for train_idx, test_idx in self.skf.split(self.X, self.y):
-            yield test_idx
-
-    def __len__(self):
-        return len(self.y)
 
 
 def plot_cond_pca_tsne(y_test_temp, indices_experts, epoch):
@@ -514,7 +490,6 @@ def plot_expert_heatmap(y_test, indices_experts, epoch, data_cond_names, num_bin
     # Create a figure with 9 subplots (3x3 grid)
     fig, axes = plt.subplots(3, 3, figsize=(18, 12))
     fig.suptitle(f"Sample Distribution Across Experts and Continuous Bins. Epoch {epoch}", fontsize=16)
-    print(data_cond_names)
     # Loop through each variable and create a heatmap
     for var_idx, var_name in enumerate(data_cond_names):
         ax = axes[var_idx // 3, var_idx % 3]
@@ -541,8 +516,6 @@ def plot_expert_heatmap(y_test, indices_experts, epoch, data_cond_names, num_bin
 
     plt.tight_layout(rect=[0, 0, 1, 0.95])  # Adjust layout to fit the title
 
-    save_path = os.path.join(save_path, "cond_data_expert_specialization_2.png")
-    # Save the plot if a save path is provided
     plt.tight_layout()
     if save_path:
         plt.savefig(save_path)
@@ -561,7 +534,7 @@ def plot_expert_specialization(y_test, indices_experts, epoch, data_cond_names, 
     fig, axes = plt.subplots(3, 3, figsize=(18, 12))
     fig.suptitle(f"Expert Specialization on Input Data- Epoch {epoch}", fontsize=16)
 
-    colors = ['steelblue', 'darkorange', 'forestgreen']  # Define colors
+    colors = ['steelblue', 'darkorange', 'forestgreen', 'red', 'purple', 'brown', 'pink', 'gray']
     expert_labels = [f"Expert {i+1}" for i in range(len(indices_experts))]
 
     for var_idx, var_name in enumerate(data_cond_names):
@@ -582,8 +555,7 @@ def plot_expert_specialization(y_test, indices_experts, epoch, data_cond_names, 
 
             # Set the positions and width for the bars
             x = np.arange(len(unique_values))  # the label locations
-            width = 0.2  # the width of the bars
-
+            width = 0.1  # the width of the bars
             # Plot the grouped bar plot with specified colors
             for i, expert_data in enumerate(data):
                 ax.bar(x + (i - 1) * width, expert_data, width, label=expert_labels[i], color=colors[i])
@@ -598,24 +570,53 @@ def plot_expert_specialization(y_test, indices_experts, epoch, data_cond_names, 
             ax.legend(loc='upper right', fontsize='x-small')
         else:  # Continuous variables (KDE plots)
             continuous_variable = y_test_np[:, var_idx]
-            x_range = np.linspace(continuous_variable.min(), continuous_variable.max(), num_points_kde)
+            # Safe x-range (handle constant-valued columns)
+            x_min, x_max = float(np.min(continuous_variable)), float(np.max(continuous_variable))
+            if not np.isfinite(x_min) or not np.isfinite(x_max):
+                # Nothing sensible to plot on this axis
+                continue
+            if x_min == x_max:
+                x_min -= 1e-6
+                x_max += 1e-6
+            x_range = np.linspace(x_min, x_max, num_points_kde)
 
+            def _should_skip_kde_1d(x, min_samples=5, var_eps=1e-12):
+                x = np.asarray(x)
+                x = x[np.isfinite(x)]
+                if x.size < min_samples:
+                    return True
+                if np.std(x) < var_eps:
+                    return True
+                return False
+
+            plotted_any = False
             for expert_idx, indices in enumerate(indices_experts):
                 expert_data = continuous_variable[indices]
-                kde = stats.gaussian_kde(expert_data)
-                y = kde(x_range)
-                ax.plot(x_range, y, label=f"Expert {expert_idx + 1}")
+
+                # Skip experts with too few points or near-zero variance
+                if _should_skip_kde_1d(expert_data, min_samples=5, var_eps=1e-12):
+                    continue
+
+                try:
+                    kde = stats.gaussian_kde(expert_data, bw_method='scott')  # or 'silverman'
+                    y = kde(x_range)
+                    ax.plot(x_range, y, label=f"Expert {expert_idx + 1}")
+                    plotted_any = True
+                except np.linalg.LinAlgError:
+                    # Singular covariance → skip this expert for this subplot
+                    continue
 
             ax.set_title(f"{var_name}")
             ax.set_xlabel("Value")
             ax.set_ylabel("Density")
             ax.legend(loc='upper right', fontsize='x-small')
 
-    save_path = os.path.join(save_path, "expert_spec_cond_data.png")
+    # save_path = os.path.join(save_path, "expert_spec_cond_data.png")
     plt.tight_layout(rect=[0, 0.03, 1, 0.95])
     if save_path:
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
-        plt.savefig(save_path)
+        # plt.savefig(save_path)
+    plt.close(fig)
     return fig
 
 
@@ -625,7 +626,8 @@ def calculate_adaptive_load_balancing_loss(routing_scores, alb_strength=1e-2, ep
 
     Args:
         routing_scores (torch.Tensor): A 1D tensor of shape (N_experts,) representing the sum
-                                       of the routing probabilities (i.e. the "routing score") for each expert over the batch.
+                                       of the routing probabilities (i.e. the "routing score")
+                                       for each expert over the batch.
         alb_strength (float): A scalar that controls the strength of the load balancing loss.
         eps (float): A small constant to avoid division by zero.
 

@@ -1,6 +1,5 @@
-from expertsim.models.moe import MoEWrapper, MoEWrapperUnified
+from expertsim.models.moe import MoEWrapper
 import torch
-import torch.optim as optim
 import os
 from typing import Tuple, List
 
@@ -30,34 +29,16 @@ def setup_optimizers(wrapper: MoEWrapper, cfg) -> Tuple[List, List, torch.optim.
     ]
 
     # Auxiliary regressor optimizer
-    aux_reg_optim = torch.optim.Adam(wrapper.aux_reg.parameters(), lr=cfg.model.aux_reg.lr_a)
-
-    # Router optimizer
-    router_optim = torch.optim.Adam(wrapper.router.parameters(), lr=cfg.model.router.lr_r)
-
-    return gen_optims, disc_optims, aux_reg_optim, router_optim
-
-
-def setup_optimizers_unified(wrapper: MoEWrapperUnified, cfg) -> Tuple[List, List, torch.optim.Optimizer, torch.optim.Optimizer]:
-    """
-    Create optimizers for all model components.
-
-    Returns:
-        Tuple of (generator_optimizers, discriminator_optimizers, aux_reg_optimizer, router_optimizer)
-    """
-    # Generator optimizers
-    gen_optims = torch.optim.Adam(wrapper.generator.parameters(), lr=cfg.model.generator.lr_g)
 
     # Discriminator optimizers
-    disc_optims = torch.optim.Adam(wrapper.discriminator.parameters(), lr=cfg.model.discriminator.lr_d)
+    aux_reg_optims = [
+        torch.optim.Adam(aux_reg.parameters(), lr=cfg.model.aux_reg.lr_a)
+        for aux_reg in wrapper.aux_regs
+    ]
 
-    # Auxiliary regressor optimizer
-    # aux_reg_optim = torch.optim.Adam(wrapper.aux_reg.parameters(), lr=cfg.model.aux_reg.lr_a)
-    aux_reg_optim = None
     # Router optimizer
     router_optim = torch.optim.Adam(wrapper.router.parameters(), lr=cfg.model.router.lr_r)
-
-    return gen_optims, disc_optims, aux_reg_optim, router_optim
+    return gen_optims, disc_optims, aux_reg_optims, router_optim
 
 
 def print_model_info(wrapper: MoEWrapper):

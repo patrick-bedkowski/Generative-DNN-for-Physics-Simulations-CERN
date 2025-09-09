@@ -46,9 +46,11 @@ def save_train_test_indices(filepath_dir: str, train_indices: np.array, test_ind
 
 
 def append_experiment_dir_to_cfg(cfg):
-    date_str = datetime.now().strftime("%d_%m_%Y_%H_%M_%S_%f")[:-3]
-    experiment_dir = f"{cfg.config.run_name}_{date_str}"
-    if cfg.train.checkpoint_experiment_dir is None:
-        cfg.config.experiment_dir = experiment_dir
+    date_str = datetime.now().strftime("%d_%m_%Y_%H_%M_%S_%f")
+    run_name_with_date = f"{cfg.config.run_name}_{date_str}"
+    cfg.config.date = date_str  # save in the current folder
+    cfg.wandb.run_name = run_name_with_date
+    if cfg.train.save_experiments_dir is None:
+        cfg.config.experiment_dir = run_name_with_date  # save in the current folder
     else:
-        cfg.config.experiment_dir = cfg.train.checkpoint_experiment_dir
+        cfg.config.experiment_dir = os.path.join(cfg.train.save_experiments_dir, run_name_with_date)
