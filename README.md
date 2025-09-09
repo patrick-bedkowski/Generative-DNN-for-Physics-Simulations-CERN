@@ -36,7 +36,8 @@ Necessary data to run the experiments are the following:
 
 To get the original files needed for training and inference get it from here [Google Drive](). 
 
-### Configuration pre training
+### Training instructions
 
 1. Open ```expertsim/train/hooks.py``` file and fill variables `ENTITY` and `PROJECT` with your [Weights & Biases](https://wandb.ai/) account name and project name.
-2. 
+2. Modify the config files ```expertsim/config/default.yaml```
+3. Run the training from main directory using command: ```python -u cli.py --config expertsim/config/default.yaml```
